@@ -49,12 +49,17 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-10-20 02:55) `[frontend]` `[backend]` `[api]` GIT 面板支持 hunk 级 stage / unstage / revert：diff 抽屉内每个 hunk 带 `+` / `−` / `↺` 操作（revert 二次确认），后端预切分可 apply patch 并在应用前与当前 diff 逐字比对，内容已变化返回 `stale_hunk` 并自动刷新；新增 diff 上下文展开切换（U3 ↔ U10）。rename/新增/删除/mode-only/二进制/超限 diff 不提供 hunk 按钮（`src/git/repo.rs`、`GET /git/hunks`、`POST /git/hunk`、`frontend/src/components/GitPanel/{GitDrawer,DiffView}.tsx`）
+
 ### Changed
 
 - (2026-10-20 02:10) `[backend]` 版本探测支持可选 GitHub token：每次请求现读 `GH_TOKEN`/`GITHUB_TOKEN`（优先级同 `gh`，不落盘），有效时以 Bearer 认证把 API 额度提升到 5000 次/时；token 缺失/失效/额度耗尽继续按渠道降级。两个变量加入 `startup_leak_env_vars`，不再继承进 tmux/pty/ACP agent 及 update 子进程（`src/update.rs`、`src/engine/pty_io.rs`、`src/acp/agent_proc.rs`）
 
 ### Fixed
 
+- (2026-10-20 02:55) `[frontend]` 修复 GIT 面板写操作并发时第二个操作未执行却提示成功：`gitStore.mutate` 忙时返回 `false`，调用方不再弹成功 toast / 刷新（hunk 快速连点场景尤易触发）（`frontend/src/stores/gitStore.ts`）
 - (2026-10-20 01:15) `[frontend]` `[backend]` 修复长期打开的标签页收不到新版本提醒：UpdateBadge 从「挂载时一次性探测、失败静默吞掉」改为每 10 分钟轮询并在页面恢复可见/网络恢复时补查（失败保留 console 诊断），服务端版本成功缓存 1h→15min 且主源/降级源失败写入 daemon 日志（`frontend/src/components/Sidebar/UpdateBadge.tsx`、`src/api/system.rs`）
 
 ## [0.3.3] - 2026-10-20

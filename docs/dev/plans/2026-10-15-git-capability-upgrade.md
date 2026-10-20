@@ -1,6 +1,6 @@
 # Git 面板能力提升计划（对标 openchamber-v2）
 
-> 状态：**Phase 1 + AI commit message 已实施**（2026-10-19）；Phase 2/3 待排期
+> 状态：**Phase 1 + Phase 2 + AI commit message 已实施**（Phase 1 2026-10-19、Phase 2 2026-10-20）；Phase 3 待排期
 > 触发条件：修改 `src/git/repo.rs`、`src/git/mod.rs`、`src/api/git.rs`、`frontend/src/components/GitPanel/`（GitPanel/GitDrawer/DiffView/diffParser）、`frontend/src/stores/gitStore.ts` 任一项前**必读**
 > 关联：`docs/dev/plans/archive/2026-07-26-git-panel.md`（v1 设计与排除清单——本计划重开其中多项，实施后需在该归档文档加勘误指针）、`docs/architecture/backend.md`（git 端点章）、`docs/architecture/frontend.md`（GitPanel 结构）
 > 来源：2026-10-15 对 `/home/pax/coding/research/openchamber-v2`（VSCode SCM 级 git 实现：服务端 59 文件 + UI ~12000 行 + GitHub 全集成）的逐文件对比研究，证据行号随附各节
@@ -175,13 +175,33 @@
   4. AMEND 留空提交 → 提交信息不变、sha 变化；「提交并推送」中 push 失败时 commit 成功 toast 仍保留。
   5. 终端持锁期间在面板 stage → 自动重试后成功；持续持锁 → 原样报错且不删除 `index.lock`。
 
-### Phase 2：hunk 批（差距最大项）
+### Phase 2：hunk 批（差距最大项）✅ 2026-10-20
 
 **6）hunk 级 stage/unstage/revert（+ context 展开）**
 - 后端：`GET /git/hunks`（raw + 结构化 hunks，见 D2）；`POST /git/hunk`（canonical 校验 + 临时 patch + `git apply --check` → apply）；错误码 `stale_hunk`；`/git/diff` 契约不动（untracked/commit 详情继续用它）。
 - 前端 GitDrawer：文件 diff 场景改调 `/git/hunks`；DiffView 扩展接收 hunks（保留 raw 路径兼容 commit 详情）；hunk header 行加操作按钮组（+ / − / ↺，ui-style-guide §12 按钮规范）；`stale_hunk` → toast「内容已变化」+ 立即重拉；操作后走既有 refreshTick。
 - context 展开（顺手项）：`git diff -U3` ↔ `-U<n>` 切换按钮（后端 diff/hunks 增加 `context_lines` 参数）。
 - 测试：Rust 集成——每个 action 的三态（正常应用 / stale 拒绝 / 无 `@@` 头拒绝）；行号正确性（stage 第 2 个 hunk 后第 1 个 hunk 的行号是否漂移——断言重新拉取的 diff 内容）；前端 diffParser/hunk 按钮单测；手动回归进 user-testing.md。
+
+**实施记录（Phase 2，2026-10-20）**
+
+- 后端：`GET /git/hunks`（`{diff, truncated, hunks:[{header,patch}], context_lines, root}`）与 `POST /git/hunk`（`{path, action, patch, context_lines}`）；`src/git/repo.rs` 新增 `split_hunks` / `file_hunks` / `apply_hunk`、`HunkAction`、临时 patch 文件 RAII、路径校验。
+- 前端：GitDrawer 的 tracked 文件改走 `/git/hunks`（untracked/commit 保持 raw）；DiffView 在 hunk header 加 `+`/`−`/`↺` 按钮；header 提供 `+ctx`/`−ctx` 切换（U3 ↔ U10，截断/untracked/commit 不显示）；revert 走 ConfirmDialog。`stale_hunk`/`invalid_hunk` 纳入本地化 toast，任何失败都会 bump refreshTick 立即重拉。
+- 实施偏差/细化：
+  1. **POST 不接收 `staged`**：方向由 action 唯一决定（stage/revert=unstaged diff，unstage=staged diff），避免两处语义分叉。
+  2. hunk 仅在「未截断 + 单文件 + 非 binary/new/deleted/rename/copy/mode-only/symlink/submodule + 至少一个 `@@`」时提供；其余形态返回空列表，由文件级按钮覆盖（计划原文只排除 untracked）。
+  3. `/git/diff` 同步增加 `context_lines`（additive）；服务端把值 clamp 到 1..=20 并在 `/git/hunks` 响应回显，前端原样回传生成 patch 时的值，避免展开期间误报 stale。
+  4. 错误码收敛为 `stale_hunk`（canonical 不匹配，或 `git apply --check`/apply 失败）与 `invalid_hunk`（untracked、patch 空/超限、路径非法等）；不单列 `hunk_conflict`。
+  5. diff 命令强制 `--no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ --full-index`，apply 加 `--whitespace=nowarn`；非合法 UTF-8 的 diff 只展示、不提供 hunk（禁止 U+FFFD 回写）。
+  6. 顺带修复 `gitStore.mutate` 忙时「静默丢弃却提示成功」：返回 `Promise<boolean>`，`runMutation` 仅在真正执行后提示成功。
+- 手动回归：
+  1. MM 文件 staged/unstaged 两栏分别操作单 hunk，另一侧不受影响。
+  2. stage 第 2 个 hunk 后重新打开，第 1 个 hunk 行号与内容不漂移；末尾无换行文件可操作。
+  3. 展开 U10 后 stage 不误报 stale；终端同时改文件 → 提示内容已变化并自动刷新。
+  4. 快速连点 hunk 按钮，第二次不出现假成功 toast。
+  5. revert hunk 必须二次确认；取消不改文件。
+  6. 移动端（coarse pointer）按钮常显；rename/新增/删除/二进制/大 diff 截断态无 hunk 按钮。
+- 自动化验证（2026-10-20）：`src/git/repo.rs` 45 例单测全绿（含 staging 两个 hunk、行号重算、CRLF/无尾换行、Unicode 路径、锁重试）；前端新增 DiffView/GitDrawer/gitStore/client 共 27 例全绿；真机 E2E 走通 UI 的 hunk stage → unstage → revert（二次确认）与 stale toast + 抽屉自动刷新，API 侧 stage/unstage/revert/stale 均按预期落盘。
 
 ### Phase 3：协作批
 

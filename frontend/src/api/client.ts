@@ -815,12 +815,36 @@ export const api = {
   //    to session/workspace id only; the backend resolves the repo root) ──
   gitStatus: (bind: GitBind) =>
     request<GitStatus>(`/git/status?${gitBindQuery(bind)}`, { silent: true }),
-  gitDiff: (bind: GitBind, params: { path: string; staged?: boolean; untracked?: boolean }) => {
+  gitDiff: (bind: GitBind, params: { path: string; staged?: boolean; untracked?: boolean; context_lines?: number }) => {
     let url = `/git/diff?${gitBindQuery(bind)}&path=${encodeURIComponent(params.path)}`
     if (params.staged) url += '&staged=true'
     if (params.untracked) url += '&untracked=true'
+    if (params.context_lines != null) url += `&context_lines=${params.context_lines}`
     return request<{ diff: string; truncated: boolean; root: string }>(url)
   },
+  gitHunks: (bind: GitBind, params: { path: string; staged?: boolean; context_lines?: number }) => {
+    let url = `/git/hunks?${gitBindQuery(bind)}&path=${encodeURIComponent(params.path)}`
+    if (params.staged) url += '&staged=true'
+    if (params.context_lines != null) url += `&context_lines=${params.context_lines}`
+    return request<GitHunksResponse>(url)
+  },
+  gitHunk: (bind: GitBind, params: {
+    path: string
+    action: GitHunkAction
+    patch: string
+    context_lines: number
+  }) =>
+    request('/git/hunk', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...gitBindBody(bind),
+        path: params.path,
+        action: params.action,
+        patch: params.patch,
+        context_lines: params.context_lines,
+      }),
+      silent: true,
+    }),
   gitLog: (bind: GitBind, params: { skip?: number; limit?: number }) =>
     request<{ entries: GitLogEntry[]; has_more: boolean } | { is_repo: false }>(
       `/git/log?${gitBindQuery(bind)}&skip=${params.skip ?? 0}&limit=${params.limit ?? 50}`,
@@ -955,6 +979,24 @@ export interface GitStashEntry {
   index: number
   date: string
   message: string
+}
+
+export type GitHunkAction = 'stage' | 'unstage' | 'revert'
+
+/** One apply-able hunk. `patch` is an opaque token echoed back to `/git/hunk`. */
+export interface GitHunk {
+  /** The `@@ ... @@` line, matched against the display parser before use. */
+  header: string
+  patch: string
+}
+
+export interface GitHunksResponse {
+  diff: string
+  truncated: boolean
+  hunks: GitHunk[]
+  /** Effective context-line count used to build `hunks` (server-clamped). */
+  context_lines: number
+  root: string
 }
 
 // ── AI commit message settings ──

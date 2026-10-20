@@ -3209,6 +3209,14 @@ select optgroup option {
   opacity: 0.4;
   cursor: default;
 }
+/* Compact context toggle in the diff drawer header (overrides the 18px square). */
+.git-ctx-btn {
+  width: auto;
+  padding: 0 6px;
+  font-family: var(--reader-font);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
 
 /* ── Stash panel ── */
 .git-stash-form {
@@ -3592,6 +3600,24 @@ select optgroup option {
 .git-diff-line-meta .git-diff-text {
   color: var(--accent);
   opacity: 0.8;
+}
+.git-diff-hunk-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding-left: 6px;
+  opacity: 0.55;
+  transition: opacity 0.1s ease;
+}
+.git-diff-line-hunk:hover .git-diff-hunk-actions,
+.git-diff-hunk-actions:focus-within {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  .git-diff-hunk-actions {
+    opacity: 1;
+  }
 }
 .git-diff-truncated {
   padding: 10px 12px;

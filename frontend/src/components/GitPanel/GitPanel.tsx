@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, ApiError, type GitBind, type GitBranch, type GitLogEntry, type GitStatusEntry } from '../../api/client'
+import {
+  api, ApiError, type GitBind, type GitBranch, type GitHunkAction, type GitLogEntry, type GitStatusEntry,
+} from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
 import { useGitStore, GIT_POLL_INTERVAL_MS } from '../../stores/gitStore'
 import { useToastStore } from '../../stores/toastStore'
@@ -25,7 +27,7 @@ const LOG_PAGE_SIZE = 50
 /** Backend error codes (ADR-6 refined stderr) with localized toast copy. */
 const KNOWN_ERROR_CODES = [
   'auth', 'non_fast_forward', 'no_upstream', 'dirty_worktree', 'timeout', 'not_merged', 'conflict',
-  'nothing_to_stash', 'stash_conflict', 'nothing_staged',
+  'nothing_to_stash', 'stash_conflict', 'nothing_staged', 'stale_hunk', 'invalid_hunk',
   'ai_not_configured', 'ai_auth', 'ai_key_env_missing', 'ai_rate_limited', 'ai_timeout',
   'ai_network', 'ai_upstream', 'ai_invalid_response',
 ] as const
@@ -247,7 +249,8 @@ export function GitPanel({ visible }: GitPanelProps) {
   ): Promise<boolean> => {
     if (!bind) return false
     try {
-      await mutate(bind, op)
+      const ran = await mutate(bind, op)
+      if (!ran) return false
       setStatusTick((n) => n + 1)
       if (successMsg) addToast('success', successMsg)
       return true
@@ -256,6 +259,31 @@ export function GitPanel({ visible }: GitPanelProps) {
       return false
     }
   }, [bind, mutate, addToast, toastError])
+
+  const handleHunkAction = useCallback(async (request: {
+    path: string
+    action: GitHunkAction
+    patch: string
+    context_lines: number
+  }): Promise<boolean> => {
+    if (!bind) return false
+    try {
+      const ran = await mutate(bind, () => api.gitHunk(bind, request))
+      if (!ran) return false
+      setStatusTick((n) => n + 1)
+      const successKey = request.action === 'stage'
+        ? 'git.hunkStaged'
+        : request.action === 'unstage' ? 'git.hunkUnstaged' : 'git.hunkReverted'
+      addToast('success', t(successKey))
+      return true
+    } catch (err: unknown) {
+      toastError(err)
+      // A stale hunk (or an apply race) is best recovered by refetching the
+      // diff; the drawer refreshes from the same tick as the status polling.
+      setStatusTick((n) => n + 1)
+      return false
+    }
+  }, [bind, mutate, addToast, t, toastError])
 
   const entries = status?.entries ?? []
   const stagedEntries = entries.filter(isStaged)
@@ -350,10 +378,11 @@ export function GitPanel({ visible }: GitPanelProps) {
     if (!bind || !target) return
     setBranchBusy(true)
     try {
-      await mutate(bind, async () => {
+      const ran = await mutate(bind, async () => {
         await api.gitRenameBranch(bind, target.name, newName)
         await fetchBranches(bind)
       })
+      if (!ran) return
       addToast('success', t('git.renamedBranch', { name: newName }))
       setRenameTarget(null)
     } catch (err) {
@@ -368,10 +397,14 @@ export function GitPanel({ visible }: GitPanelProps) {
     if (!bind || !target) return
     setBranchBusy(true)
     try {
-      await mutate(bind, async () => {
+      const ran = await mutate(bind, async () => {
         await api.gitDeleteBranch(bind, target.name, force)
         await fetchBranches(bind)
       })
+      if (!ran) {
+        setBranchBusy(false)
+        return
+      }
     } catch (err) {
       const code = err instanceof ApiError ? (err.body as { code?: string }).code : undefined
       if (code === 'not_merged' && !force) {
@@ -390,8 +423,8 @@ export function GitPanel({ visible }: GitPanelProps) {
     if (alsoRemote && target.upstream) {
       const remote = target.upstream.split('/')[0] || 'origin'
       try {
-        await mutate(bind, () => api.gitDeleteRemoteBranch(bind, target.name, remote))
-        addToast('success', t('git.deletedRemoteBranch', { name: target.upstream }))
+        const ran = await mutate(bind, () => api.gitDeleteRemoteBranch(bind, target.name, remote))
+        if (ran) addToast('success', t('git.deletedRemoteBranch', { name: target.upstream }))
       } catch (err) {
         toastError(err)
       }
@@ -711,6 +744,8 @@ export function GitPanel({ visible }: GitPanelProps) {
           onHeightChange={setDrawerHeight}
           onHeightCommit={commitDrawerHeight}
           refreshTick={statusTick}
+          runHunkAction={handleHunkAction}
+          busy={mutating}
           onOpenInEditor={(absolutePath, repoRoot) => {
             setDrawerTarget(null)
             setEditorTarget(absolutePath)

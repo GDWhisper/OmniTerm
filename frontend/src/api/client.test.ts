@@ -174,3 +174,41 @@ describe('api.getAuditLog (安全审计日志读口)', () => {
     vi.resetModules()
   })
 })
+
+describe('git hunk endpoints', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('gitHunks encodes the path and forwards staged/context_lines', async () => {
+    const calls = mockFetch()
+
+    await api.gitHunks(
+      { workspaceId: 'w1' },
+      { path: 'src/a b.ts', staged: true, context_lines: 10 },
+    )
+    expect(lastUrl(calls)).toBe(
+      '/api/v1/git/hunks?workspace_id=w1&path=src%2Fa%20b.ts&staged=true&context_lines=10',
+    )
+  })
+
+  it('gitHunk posts the opaque patch with the bind fields', async () => {
+    const calls = mockFetch()
+    const patch = '@@ -1 +1 @@\n-a\n+b\n'
+
+    await api.gitHunk(
+      { session: 's1' },
+      { path: 'a.txt', action: 'stage', patch, context_lines: 3 },
+    )
+    expect(lastUrl(calls)).toBe('/api/v1/git/hunk')
+    const init = calls[0][1]
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(String(init?.body))).toEqual({
+      session: 's1',
+      path: 'a.txt',
+      action: 'stage',
+      patch,
+      context_lines: 3,
+    })
+  })
+})

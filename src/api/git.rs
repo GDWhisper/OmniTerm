@@ -18,6 +18,8 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/git/status", get(git_status))
         .route("/git/diff", get(git_diff))
+        .route("/git/hunks", get(git_hunks))
+        .route("/git/hunk", post(git_hunk))
         .route("/git/log", get(git_log))
         .route("/git/show", get(git_show))
         .route("/git/branches", get(git_branches))
@@ -55,6 +57,7 @@ struct RepoQuery {
     path: Option<String>,
     staged: Option<bool>,
     untracked: Option<bool>,
+    context_lines: Option<u32>,
     // log params
     skip: Option<u32>,
     limit: Option<u32>,
@@ -85,6 +88,11 @@ struct RepoBody {
     mode: Option<String>,
     #[serde(default)]
     amend: bool,
+    // hunk params
+    path: Option<String>,
+    action: Option<String>,
+    patch: Option<String>,
+    context_lines: Option<u32>,
 }
 
 fn git_error_response(e: GitError) -> Response {
@@ -151,11 +159,69 @@ async fn git_diff(State(state): State<AppState>, Query(q): Query<RepoQuery>) -> 
     let root = bind_repo!(state, q);
     let staged = q.staged.unwrap_or(false);
     let untracked = q.untracked.unwrap_or(false);
-    match repo::diff_file(&root, &path, staged, untracked).await {
+    let context_lines = repo::normalize_context_lines(q.context_lines);
+    match repo::diff_file(&root, &path, staged, untracked, context_lines).await {
         Ok((diff, truncated)) => {
             (StatusCode::OK, Json(json!({ "diff": diff, "truncated": truncated, "root": root })))
                 .into_response()
         }
+        Err(e) => git_error_response(e),
+    }
+}
+
+/// Single-file diff plus the canonical hunk patches that drive hunk actions.
+async fn git_hunks(State(state): State<AppState>, Query(q): Query<RepoQuery>) -> Response {
+    let Some(path) = q.path.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "path required" })))
+            .into_response();
+    };
+    if q.untracked.unwrap_or(false) {
+        return git_error_response(GitError::invalid_hunk(
+            "untracked files have no diff base for hunk actions",
+        ));
+    }
+    let staged = q.staged.unwrap_or(false);
+    let context_lines = repo::normalize_context_lines(q.context_lines);
+    let root = bind_repo!(state, q);
+    match repo::file_hunks(&root, &path, staged, context_lines).await {
+        Ok(data) => (
+            StatusCode::OK,
+            Json(json!({
+                "diff": data.diff,
+                "truncated": data.truncated,
+                "hunks": data.hunks,
+                "context_lines": data.context_lines,
+                "root": root,
+            })),
+        )
+            .into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+/// Apply one hunk. The action determines the diff direction; the patch is
+/// canonical-checked against the current diff before touching the index or
+/// working tree.
+async fn git_hunk(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(path) = b.path.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "path required" })))
+            .into_response();
+    };
+    let Some(action) = b.action.as_deref().and_then(repo::HunkAction::parse) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "action must be stage, unstage or revert" })),
+        )
+            .into_response();
+    };
+    let Some(patch) = b.patch.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "patch required" })))
+            .into_response();
+    };
+    let context_lines = repo::normalize_context_lines(b.context_lines);
+    let root = bind_repo!(state, b);
+    match repo::apply_hunk(&root, &path, action, &patch, context_lines).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
         Err(e) => git_error_response(e),
     }
 }
