@@ -1,6 +1,6 @@
 # Git 面板能力提升计划（对标 openchamber-v2）
 
-> 状态：**Phase 1 + Phase 2 + Phase 3 + AI commit message + P2 低成本项已实施**（Phase 1 2026-10-19、Phase 2 2026-10-20、Phase 3 2026-10-20、P2 低成本项 2026-10-20）；P2 候补仅剩 graph / split view 按信号触发
+> 状态：**已归档（2026-10-20）**——Phase 1 + Phase 2 + Phase 3 + AI commit message + P2 低成本项已全部实施（Phase 1 2026-10-19、Phase 2 2026-10-20、Phase 3 2026-10-20、P2 低成本项 2026-10-20）；P2 候补仅剩 graph / split view，触发时另立新计划，不再往本文追加 Phase
 > 触发条件：修改 `src/git/repo.rs`、`src/git/mod.rs`、`src/api/git.rs`、`frontend/src/components/GitPanel/`（GitPanel/GitDrawer/DiffView/diffParser）、`frontend/src/stores/gitStore.ts` 任一项前**必读**
 > 关联：`docs/dev/plans/archive/2026-07-26-git-panel.md`（v1 设计与排除清单——本计划重开其中多项，实施后需在该归档文档加勘误指针）、`docs/architecture/backend.md`（git 端点章）、`docs/architecture/frontend.md`（GitPanel 结构）
 > 来源：2026-10-15 对 `/home/pax/coding/research/openchamber-v2`（VSCode SCM 级 git 实现：服务端 59 文件 + UI ~12000 行 + GitHub 全集成）的逐文件对比研究，证据行号随附各节
