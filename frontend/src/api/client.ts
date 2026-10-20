@@ -122,6 +122,17 @@ export interface DuplicateGroup {
 // Minimal file entry shape returned by /files and /system/dirs.
 // Kept here (not in a component file) so both FileManager and
 // the new-project modal can use the same type without coupling.
+export interface FileListResponse {
+  files: FileEntry[]
+  cwd?: string
+  is_outside_workspace?: boolean
+  workspace_root?: string
+  /** 截断前的真实条目数；旧服务端可能缺省 */
+  total?: number
+  /** 是否因 MAX_LIST_ENTRIES 被截断；旧服务端可能缺省 */
+  truncated?: boolean
+}
+
 export interface FileEntry {
   path_type: 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
   name: string
@@ -322,7 +333,10 @@ export const api = {
   multiplexerStatus: () =>
     request<{ available: boolean; error?: string; install_hints?: string }>('/system/multiplexer', { silent: true }),
   listDirs: (path: string) =>
-    request<{ files: FileEntry[] }>(`/system/dirs?path=${encodeURIComponent(path)}`, { silent: true }),
+    request<{ files: FileEntry[]; total?: number; truncated?: boolean }>(
+      `/system/dirs?path=${encodeURIComponent(path)}`,
+      { silent: true },
+    ),
   pathExists: (path: string) =>
     request<{ exists: boolean }>(`/system/exists?path=${encodeURIComponent(path)}`),
   /** 在运行 OmniTerm 的本机调起系统目录选择器；远程访问会被后端 403
@@ -609,7 +623,7 @@ export const api = {
     let url = `/files?workspace=${workspace}&path=${path || ''}`
     if (sort) url += `&sort=${sort}`
     if (desc) url += `&order=desc`
-    return request<FileEntry[]>(url)
+    return request<FileListResponse>(url)
   },
   deleteFile: (workspace: string, path: string) =>
     request(`/files?workspace=${workspace}&path=${encodeURIComponent(path)}`, {
@@ -653,7 +667,7 @@ export const api = {
     let url = `/files?session=${sessionId}&path=${path || ''}`
     if (sort) url += `&sort=${sort}`
     if (desc) url += `&order=desc`
-    return request<{ files: FileEntry[]; cwd: string; is_outside_workspace: boolean }>(url)
+    return request<FileListResponse>(url)
   },
   uploadFileBySession: (sessionId: string, path: string, file: File) => {
     const form = new FormData()
@@ -685,14 +699,15 @@ export const api = {
     }),
 
   // Generic file methods — support session or workspaceId (choose one)
-  listFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; path?: string; sort?: string; desc?: boolean }) => {
+  listFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; path?: string; sort?: string; desc?: boolean; all?: boolean }) => {
     let url = `/files?path=${params.path || ''}`
     if (params.session) url += `&session=${params.session}`
     if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
     if (params.projectId) url += `&workspace=${params.projectId}`
     if (params.sort) url += `&sort=${params.sort}`
     if (params.desc) url += `&order=desc`
-    return request<{ files: FileEntry[]; cwd: string; is_outside_workspace: boolean; workspace_root?: string }>(url)
+    if (params.all) url += `&all=true`
+    return request<FileListResponse>(url)
   },
   deleteFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; allowEscape?: boolean }) => {
     let url = `/files?path=${encodeURIComponent(params.path)}`

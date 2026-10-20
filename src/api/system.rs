@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 
 use crate::AppState;
 use crate::auth::local_access::is_local_request;
-use crate::fs::{self, SortKey};
+use crate::fs::{self, MAX_LIST_ENTRIES, SortKey};
 use crate::native_picker::{self, PickError, PickOutcome};
 use crate::update;
 
@@ -138,7 +138,20 @@ async fn list_dirs(
     }
 
     match fs::list_dir(&canonical, "", SortKey::Name, false).await {
-        Ok(entries) => (axum::http::StatusCode::OK, Json(json!({ "files": entries }))),
+        Ok(entries) => {
+            // 目录浏览器只需要目录；服务端先过滤再套 wire 上限，避免大目录里
+            // 文件把目录挤出截断窗口（前端 filterDirEntries 仍保留作前缀过滤）。
+            let mut dirs: Vec<_> = entries.into_iter().filter(|e| e.is_dir()).collect();
+            let total = dirs.len();
+            let truncated = total > MAX_LIST_ENTRIES;
+            if truncated {
+                dirs.truncate(MAX_LIST_ENTRIES);
+            }
+            (
+                axum::http::StatusCode::OK,
+                Json(json!({ "files": dirs, "total": total, "truncated": truncated })),
+            )
+        }
         Err(e) => {
             (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
         }
@@ -545,5 +558,41 @@ mod picker_tests {
         let _held = native_picker::PICK_LOCK.lock().await;
         let (status, _) = pick_directory(loopback_peer(), loopback_headers(), request()).await;
         assert_eq!(status, StatusCode::CONFLICT);
+    }
+}
+
+#[cfg(test)]
+mod dir_tests {
+    use super::*;
+    use crate::test_utils::test_state;
+
+    #[tokio::test]
+    async fn list_dirs_filters_to_directories_and_reports_metadata() {
+        let state = test_state().await;
+        let root = std::env::temp_dir().join(format!(
+            "omniterm_dirs_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("file.txt"), b"x").unwrap();
+
+        let (status, Json(body)) = list_dirs(
+            State(state),
+            Query(ListDirsQuery { path: root.to_string_lossy().into_owned() }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["total"].as_u64(), Some(1));
+        assert_eq!(body["truncated"].as_bool(), Some(false));
+        let names: Vec<_> =
+            body["files"].as_array().unwrap().iter().filter_map(|e| e["name"].as_str()).collect();
+        assert_eq!(names, vec!["sub"]);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

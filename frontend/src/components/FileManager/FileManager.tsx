@@ -140,6 +140,10 @@ export function FileManager() {
   const [fileListViewportH, setFileListViewportH] = useState(() =>
     typeof window === 'undefined' ? 0 : window.innerHeight,
   )
+  // 列表截断状态：后端默认只返回前 MAX_LIST_ENTRIES 条；「加载全部」是显式出口
+  const [fileListTruncated, setFileListTruncated] = useState(false)
+  const [fileListTotal, setFileListTotal] = useState(0)
+  const showAllFilesRef = useRef(false)
   const [isOutsideWorkspace, setIsOutsideWorkspace] = useState(false)
   // workspace 边界根路径（listFiles2 返回的 workspace_root）；project 模式为 undefined
   const [workspaceRoot, setWorkspaceRoot] = useState<string | undefined>(undefined)
@@ -151,7 +155,7 @@ export function FileManager() {
   const [deleteDialog, setDeleteDialog] = useState<{ count: number; run: () => void } | null>(null)
 
   // Per-session file list cache for instant display on session switch
-  const fileCache = useRef<Map<string, { files: FileEntry[]; cwd: string; isOutsideWorkspace: boolean; workspaceRoot?: string }>>(new Map())
+  const fileCache = useRef<Map<string, { files: FileEntry[]; cwd: string; isOutsideWorkspace: boolean; workspaceRoot?: string; truncated: boolean; total: number }>>(new Map())
   const [loading, setLoading] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDesc, setSortDesc] = useState(false)
@@ -193,9 +197,18 @@ export function FileManager() {
   }, [activeSessionId, activeWorkspaceId])
   const sourceKey = useMemo(() => fmSource ? `${fmSource.type}:${fmSource.id}` : null, [fmSource])
 
-  const fetchFiles = useCallback(async (path?: string, sort?: string, desc?: boolean, silent = false): Promise<string | undefined> => {
-    if (!fmSource) { setFiles([]); return undefined }
-    if (!silent) setLoading(true)
+  const fetchFiles = useCallback(async (path?: string, sort?: string, desc?: boolean, silent = false, all?: boolean): Promise<string | undefined> => {
+    if (!fmSource) {
+      setFiles([])
+      setFileListTruncated(false)
+      setFileListTotal(0)
+      return undefined
+    }
+    if (!silent) {
+      setLoading(true)
+      // 非静默刷新会卸载再重挂表格；滚动容器回到 0，窗口状态必须同步归零
+      setFileListScrollTop(0)
+    }
     try {
       // Workspace mode has no session-keyed manualPath: fall back to current
       // cwd so parameterless refreshes (create/upload/rename) keep the path.
@@ -211,21 +224,30 @@ export function FileManager() {
         path: effectivePath,
         sort: sort ?? sortKeyRef.current,
         desc: desc ?? sortDescRef.current,
+        all: all ?? showAllFilesRef.current,
       })
       const newFiles = data.files ?? []
+      const truncated = data.truncated ?? false
+      const total = data.total ?? newFiles.length
       setFiles((prev) => filesEqual(prev, newFiles) ? prev : newFiles)
+      setFileListTruncated(truncated)
+      setFileListTotal(total)
       if (data.cwd) setCwd(data.cwd)
       setIsOutsideWorkspace(data.is_outside_workspace ?? false)
       // project 模式无 workspace_root（undefined）→ 重置为 undefined，此时总是弹确认（安全默认）
       setWorkspaceRoot(data.workspace_root)
       if (data.cwd) {
-        fileCache.current.set(sourceKey!, { files: newFiles, cwd: data.cwd, isOutsideWorkspace: data.is_outside_workspace ?? false, workspaceRoot: data.workspace_root })
+        fileCache.current.set(sourceKey!, { files: newFiles, cwd: data.cwd, isOutsideWorkspace: data.is_outside_workspace ?? false, workspaceRoot: data.workspace_root, truncated, total })
       }
       if (!silent) setSelected(new Set())
       return data.cwd
     } catch (err: unknown) {
       if (!silent) addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.loadFailed'))
-      if (!silent) setFiles([])
+      if (!silent) {
+        setFiles([])
+        setFileListTruncated(false)
+        setFileListTotal(0)
+      }
       return undefined
     } finally {
       if (!silent) setLoading(false)
@@ -422,7 +444,7 @@ export function FileManager() {
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [hasFiles])
+  }, [hasFiles, loading])
 
   // 目录导航回到顶部；SSE 刷新同一目录不重置
   useEffect(() => {
@@ -448,7 +470,17 @@ export function FileManager() {
   // that redundantly overlapped on session switch, causing duplicate requests.
   const prevSourceTypeRef = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (!fmSource) { setFiles([]); setCwd(''); return }
+    if (!fmSource) {
+      setFiles([])
+      setCwd('')
+      setFileListTruncated(false)
+      setFileListTotal(0)
+      return
+    }
+    // 新目录/新 source 默认回到截断视图；SSE 刷新与排序保持当前「加载全部」选择
+    showAllFilesRef.current = false
+    setFileListTruncated(false)
+    setFileListTotal(0)
     // 切换 source 类型（workspace ↔ session）时清空旧 source 留下的 drawer 路径，
     // 避免 workspaceRoot 更新为新源后与旧 filePath 失配而误弹越界确认
     // （FileDrawer 的 workspaceDrawerPath 属于 workspace 模式，fmState.drawerPath 属于 session 模式）。
@@ -463,6 +495,8 @@ export function FileManager() {
       setCwd(cached.cwd)
       setIsOutsideWorkspace(cached.isOutsideWorkspace)
       setWorkspaceRoot(cached.workspaceRoot)
+      setFileListTruncated(cached.truncated)
+      setFileListTotal(cached.total)
     }
     if (fmSource.type === 'workspace') {
       fetchFilesRef.current('.')
@@ -833,11 +867,19 @@ export function FileManager() {
         path: cwd,
       })
       setFiles(results)
+      setFileListTruncated(false)
+      setFileListTotal(results.length)
     } catch (err: unknown) {
       addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.searchFailed'))
     } finally {
       setLoading(false)
     }
+  }
+
+  // 用户显式要求完整列表：绕过后端 MAX_LIST_ENTRIES，后续刷新保持该选择
+  const handleLoadAllFiles = () => {
+    showAllFilesRef.current = true
+    void fetchFilesRef.current(undefined, undefined, undefined, false, true)
   }
 
   // ── Download mode handlers ──
@@ -1164,6 +1206,14 @@ export function FileManager() {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        {!loading && files.length > 0 && fileListTruncated && (
+          <div className="fm-truncated-bar">
+            <span>{t('fm.listTruncated', { shown: files.length, total: fileListTotal })}</span>
+            <button className="fm-truncated-action" onClick={handleLoadAllFiles}>
+              {t('fm.loadAll')}
+            </button>
+          </div>
+        )}
         {!fmSource ? (
           <div className="fm-empty">
             <span className="fm-empty-icon"><IconFolderOpen width={32} height={32} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))' }} /></span>

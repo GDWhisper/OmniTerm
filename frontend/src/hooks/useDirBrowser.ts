@@ -21,6 +21,10 @@ export function useDirBrowser() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notFound, setNotFound] = useState(false)
+  const [truncated, setTruncated] = useState(false)
+  const [total, setTotal] = useState(0)
+  // 服务端返回的当前页条目数（前缀过滤前）；截断提示用它而不是过滤后的 entries.length
+  const [shown, setShown] = useState(0)
 
   const loadDirs = useCallback(async (path: string, prefix?: string) => {
     setLoading(true)
@@ -28,7 +32,11 @@ export function useDirBrowser() {
     setNotFound(false)
     try {
       const data = await api.listDirs(path)
-      setEntries(filterDirEntries(data.files, prefix))
+      const next = filterDirEntries(data.files, prefix)
+      setEntries(next)
+      setTruncated(data.truncated ?? false)
+      setTotal(data.total ?? next.length)
+      setShown(data.files.length)
     } catch (e: unknown) {
       if (e instanceof ApiError && e.status === 404) {
         setNotFound(true)
@@ -36,6 +44,9 @@ export function useDirBrowser() {
       } else {
         setError((e instanceof Error ? e.message : String(e)) || '无法访问该目录')
       }
+      setTruncated(false)
+      setTotal(0)
+      setShown(0)
     } finally {
       setLoading(false)
     }
@@ -46,7 +57,10 @@ export function useDirBrowser() {
     setEntries([])
     setError(null)
     setNotFound(false)
+    setTruncated(false)
+    setTotal(0)
+    setShown(0)
   }, [])
 
-  return { entries, loading, error, notFound, loadDirs, reset }
+  return { entries, loading, error, notFound, truncated, total, shown, loadDirs, reset }
 }

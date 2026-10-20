@@ -26,6 +26,10 @@ use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
+/// 单次目录列表的默认条目上限（wire-level safety cap）。
+/// 显式 `all=true` 由调用方决定是否绕过；目录浏览器在过滤后应用同一上限。
+pub const MAX_LIST_ENTRIES: usize = 5000;
+
 /// 文本探测窗口大小：读取文件头部此字节数判定是否为 UTF-8 文本。
 /// 非文本（二进制）文件在窗口内即命中非法序列，可避免把大型二进制文件整体读入内存。
 const TEXT_PROBE_BYTES: usize = 64 * 1024;

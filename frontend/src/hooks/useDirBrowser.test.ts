@@ -104,6 +104,19 @@ describe('useDirBrowser', () => {
     expect(hook.notFound).toBe(false)
   })
 
+  it('surfaces truncated/total metadata and reset clears it', async () => {
+    vi.mocked(api.listDirs).mockResolvedValue({ files, total: 6000, truncated: true } as never)
+    await act(async () => { await hook.loadDirs('/home') })
+    expect(hook.truncated).toBe(true)
+    expect(hook.total).toBe(6000)
+    expect(hook.shown).toBe(files.length)
+
+    act(() => { hook.reset() })
+    expect(hook.truncated).toBe(false)
+    expect(hook.total).toBe(0)
+    expect(hook.shown).toBe(0)
+  })
+
   it('reset blanks entries/error/notFound back to the pristine state', async () => {
     vi.mocked(api.listDirs).mockRejectedValue(new MockApiError('not found', 404))
     await act(async () => { await hook.loadDirs('/nope') })

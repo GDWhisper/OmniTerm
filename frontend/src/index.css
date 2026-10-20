@@ -944,6 +944,42 @@ body.fm-dragging * {
   background: var(--accent-14) !important;
 }
 
+/* 目录浏览弹窗的截断提示（服务端过滤目录后套 MAX_LIST_ENTRIES） */
+.dir-browser-truncated {
+  padding: 4px 10px;
+  color: var(--text-muted);
+  font-family: var(--reader-font);
+  font-size: 11px;
+}
+
+/* 列表截断提示条：默认只显示前 N 条，右侧提供显式「加载全部」出口 */
+.fm-truncated-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-family: var(--reader-font);
+  font-size: 11px;
+}
+.fm-truncated-action {
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+.fm-truncated-action:hover {
+  color: var(--text-primary);
+}
+
 /* 虚拟滚动 spacer 行：只负责撑起未渲染区间的高度，不参与边框/内边距 */
 .fm-table tr.fm-spacer-row td {
   padding: 0;
