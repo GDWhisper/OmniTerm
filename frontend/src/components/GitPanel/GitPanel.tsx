@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  api, ApiError, type GitBind, type GitBranch, type GitHunkAction, type GitLogEntry, type GitStatusEntry,
+  api, ApiError, type GitBind, type GitBranch, type GitHunkAction, type GitLogEntry,
+  type GitRangeOverview, type GitStatusEntry,
 } from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
 import { useGitStore, GIT_POLL_INTERVAL_MS } from '../../stores/gitStore'
@@ -17,9 +18,12 @@ import { FileDrawer } from '../FileManager/FileDrawer'
 import { GitDrawer, type GitDrawerTarget } from './GitDrawer'
 import { BranchDeleteDialog, BranchRenameDialog } from './BranchDialogs'
 import { GeneratedMessageDialog } from './GeneratedMessageDialog'
+import { OperationBanner } from './OperationBanner'
 import { StashPanel } from './StashPanel'
+import { FileSection, RangeFileSection } from './FileSections'
 import {
-  IconArrowDown, IconCopy, IconGitBranch, IconPencil, IconRefresh, IconTrash,
+  IconArrowDown, IconCopy, IconGitBranch, IconGitMerge, IconGitRebase, IconPencil,
+  IconRefresh, IconTrash,
 } from '../FileManager/icons'
 
 const LOG_PAGE_SIZE = 50
@@ -28,15 +32,11 @@ const LOG_PAGE_SIZE = 50
 const KNOWN_ERROR_CODES = [
   'auth', 'non_fast_forward', 'no_upstream', 'dirty_worktree', 'timeout', 'not_merged', 'conflict',
   'nothing_to_stash', 'stash_conflict', 'nothing_staged', 'stale_hunk', 'invalid_hunk',
+  'invalid_base', 'no_merge_base', 'invalid_branch', 'invalid_path', 'no_operation',
+  'operation_in_progress',
   'ai_not_configured', 'ai_auth', 'ai_key_env_missing', 'ai_rate_limited', 'ai_timeout',
   'ai_network', 'ai_upstream', 'ai_invalid_response',
 ] as const
-
-function statusChar(entry: GitStatusEntry, staged: boolean): string {
-  if (entry.conflicted) return 'U'
-  if (entry.index_status === '?') return '?'
-  return staged ? entry.index_status : entry.worktree_status
-}
 
 /** A file is shown in the staged zone when its index status differs from HEAD. */
 function isStaged(e: GitStatusEntry): boolean {
@@ -109,6 +109,12 @@ export function GitPanel({ visible }: GitPanelProps) {
   const [logLoading, setLogLoading] = useState(false)
   /** Bumped on every completed status fetch; keeps the open file diff live. */
   const [statusTick, setStatusTick] = useState(0)
+  /** Branch used for the read-only BASE...HEAD comparison ('' = normal view). */
+  const [rangeBase, setRangeBase] = useState('')
+  const [range, setRange] = useState<GitRangeOverview | null>(null)
+  const [rangeLoading, setRangeLoading] = useState(false)
+  /** Branch the user asked to rebase onto (awaiting confirmation). */
+  const [rebaseTarget, setRebaseTarget] = useState<string | null>(null)
 
   // 拖拽松手才落盘：逐帧写 sessionStorage 会在一次拖拽里写上百次
   const commitDrawerHeight = useCallback((h: number) => {
@@ -133,6 +139,10 @@ export function GitPanel({ visible }: GitPanelProps) {
     setResetTarget(null)
     setGeneratedMessage(null)
     setGenerating(false)
+    setRangeBase('')
+    setRange(null)
+    setRangeLoading(false)
+    setRebaseTarget(null)
   }, [bindKey, resetGit])
 
   // ── Visible-time serial polling (ADR-4): schedule the next poll
@@ -157,7 +167,7 @@ export function GitPanel({ visible }: GitPanelProps) {
       if (timer) clearTimeout(timer)
     }
     // refreshHint restarts the loop for an immediate poll (ACP edit hint / manual ops)
-  }, [visible, bindKey, refreshHint, fetchStatus])
+  }, [visible, bind, bindKey, refreshHint, fetchStatus])
 
   // Branch list: fetched when the panel becomes visible or repo changes
   useEffect(() => {
@@ -243,6 +253,36 @@ export function GitPanel({ visible }: GitPanelProps) {
     addToast('error', code ? t(`git.error.${code}`) : (err instanceof Error ? err.message : String(err)))
   }, [addToast, t])
 
+  // Range comparison: fetched on selection / manual refresh / ACP edit hints,
+  // never by the 5s poll (the full range diff is too heavy to refetch blindly).
+  useEffect(() => {
+    if (!visible || !bind || view !== 'changes' || !rangeBase) {
+      setRange(null)
+      return
+    }
+    let cancelled = false
+    setRangeLoading(true)
+    api.gitRangeFiles(bind, rangeBase)
+      .then((data) => {
+        if (!cancelled) setRange(data)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setRange(null)
+        setRangeBase('')
+        toastError(err)
+      })
+      .finally(() => {
+        if (!cancelled) setRangeLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+    // toastError only closes over stable store callbacks/i18n; keeping it out
+    // of the deps avoids refetching when the test i18n shim returns a new `t`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, bind, view, rangeBase, refreshHint])
+
   const runMutation = useCallback(async (
     op: () => Promise<unknown>,
     successMsg?: string,
@@ -289,6 +329,11 @@ export function GitPanel({ visible }: GitPanelProps) {
   const stagedEntries = entries.filter(isStaged)
   const unstagedEntries = entries.filter(isUnstaged)
   const isRepo = status?.is_repo ?? false
+  const inProgress = status?.in_progress ?? null
+  // Checkout/merge/rebase/create-branch all rewrite HEAD; never let them run
+  // while another operation is paused (rebase also detaches HEAD, so
+  // `branch.current` alone cannot be trusted here).
+  const branchLocked = mutating || inProgress !== null
 
   // Amend may rewrite only the message (no staged files required); a plain
   // commit still needs both a message and something staged.
@@ -460,6 +505,39 @@ export function GitPanel({ visible }: GitPanelProps) {
     }, t('git.resetDone', { sha: target.shortSha }))
   }
 
+  const handleMerge = async (name: string) => {
+    if (!bind) return
+    setBranchMenuOpen(false)
+    await runMutation(() => api.gitMerge(bind, name), t('git.merged', { name }))
+    // A conflict leaves HEAD/branch state changed even though the op failed.
+    await fetchBranches(bind)
+  }
+
+  const handleRebase = async (name: string) => {
+    if (!bind) return
+    setRebaseTarget(null)
+    await runMutation(() => api.gitRebase(bind, name), t('git.rebased', { name }))
+    await fetchBranches(bind)
+  }
+
+  const refreshAfterOperation = async (ok: boolean) => {
+    if (!bind) return
+    await fetchBranches(bind)
+    if (ok && view === 'history') await fetchLog(0, false)
+  }
+
+  const handleContinue = async () => {
+    if (!bind) return
+    const ok = await runMutation(() => api.gitOperationContinue(bind), t('git.continued'))
+    await refreshAfterOperation(ok)
+  }
+
+  const handleAbort = async () => {
+    if (!bind) return
+    const ok = await runMutation(() => api.gitOperationAbort(bind), t('git.aborted'))
+    await refreshAfterOperation(ok)
+  }
+
   if (!bind) {
     return <div className="git-empty">{t('git.selectSessionFirst')}</div>
   }
@@ -495,11 +573,35 @@ export function GitPanel({ visible }: GitPanelProps) {
                     <button
                       className={`git-branch-item ${b.current ? 'active' : ''}`}
                       title={b.upstream ? `${b.name} → ${b.upstream}` : b.name}
+                      disabled={branchLocked}
                       onClick={() => { if (!b.current) handleCheckout(b.name) }}
                     >
                       {b.current ? '● ' : ''}{b.name}
                     </button>
                     <span className="git-branch-actions">
+                      {!b.current && (
+                        <>
+                          <button
+                            className="git-row-btn"
+                            disabled={branchLocked || branchBusy}
+                            title={t('git.mergeBranch')}
+                            onClick={() => void handleMerge(b.name)}
+                          >
+                            <IconGitMerge width={12} height={12} />
+                          </button>
+                          <button
+                            className="git-row-btn"
+                            disabled={branchLocked || branchBusy}
+                            title={t('git.rebaseBranch')}
+                            onClick={() => {
+                              setBranchMenuOpen(false)
+                              setRebaseTarget(b.name)
+                            }}
+                          >
+                            <IconGitRebase width={12} height={12} />
+                          </button>
+                        </>
+                      )}
                       <button
                         className="git-row-btn"
                         disabled={mutating || branchBusy}
@@ -536,11 +638,11 @@ export function GitPanel({ visible }: GitPanelProps) {
                   value={newBranchName}
                   onChange={(e) => setNewBranchName(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleCreateBranch()
+                    if (e.key === 'Enter' && !branchLocked) handleCreateBranch()
                     if (e.key === 'Escape') { setBranchMenuOpen(false); setNewBranchName('') }
                   }}
                 />
-                <button className="git-btn" onClick={handleCreateBranch} disabled={!newBranchName.trim()}>+</button>
+                <button className="git-btn" onClick={handleCreateBranch} disabled={branchLocked || !newBranchName.trim()}>+</button>
               </div>
             </div>
           )}
@@ -558,6 +660,15 @@ export function GitPanel({ visible }: GitPanelProps) {
           {t('git.pushBtn')}
         </button>
       </div>
+
+      {inProgress && (
+        <OperationBanner
+          state={inProgress}
+          busy={mutating}
+          onContinue={() => void handleContinue()}
+          onAbort={() => void handleAbort()}
+        />
+      )}
 
       {/* ── Secondary view switch: CHANGES | HISTORY ── */}
       <div className="git-viewbar">
@@ -596,7 +707,44 @@ export function GitPanel({ visible }: GitPanelProps) {
         </button>
       </div>
 
+      {view === 'changes' && (
+        <div className="git-rangebar">
+          <span className="git-rangebar-label">{t('git.rangeBase')}</span>
+          <select
+            className="git-range-select"
+            value={rangeBase}
+            disabled={inProgress !== null}
+            onChange={(e) => setRangeBase(e.target.value)}
+            title={t('git.rangeBase')}
+            aria-label={t('git.rangeBase')}
+          >
+            <option value="">{t('git.rangeNone')}</option>
+            {branches
+              .filter((b) => b.name !== status.branch)
+              .map((b) => (
+                <option key={b.name} value={b.name}>{b.name}</option>
+              ))}
+          </select>
+        </div>
+      )}
+
       {view === 'changes' ? (
+        rangeBase ? (
+          <OverlayScroll style={{ flex: 1, minHeight: 0 }}>
+            {range ? (
+              <RangeFileSection
+                base={rangeBase}
+                files={range.files}
+                filesTruncated={range.files_truncated}
+                onOpen={(file) => setDrawerTarget({ kind: 'range', base: rangeBase, path: file.path })}
+              />
+            ) : (
+              <div className="git-empty">
+                {rangeLoading ? t('git.loading') : t('git.rangeEmpty')}
+              </div>
+            )}
+          </OverlayScroll>
+        ) : (
         <>
           <OverlayScroll style={{ flex: 1, minHeight: 0 }}>
             {entries.length === 0 ? (
@@ -695,6 +843,7 @@ export function GitPanel({ visible }: GitPanelProps) {
             </div>
           </div>
         </>
+        )
       ) : (
         <OverlayScroll style={{ flex: 1, minHeight: 0 }}>
           {log.length === 0 && !logLoading ? (
@@ -826,6 +975,20 @@ export function GitPanel({ visible }: GitPanelProps) {
       />
 
       <ConfirmDialog
+        open={rebaseTarget !== null}
+        onClose={() => setRebaseTarget(null)}
+        onConfirm={() => {
+          const target = rebaseTarget
+          if (target) void handleRebase(target)
+        }}
+        title={t('git.rebaseTitle')}
+        message={t('git.rebaseConfirm', { name: rebaseTarget ?? '' })}
+        confirmText={t('git.rebaseAction')}
+        destructive
+        loading={mutating}
+      />
+
+      <ConfirmDialog
         open={resetTarget !== null}
         onClose={() => setResetTarget(null)}
         onConfirm={handleReset}
@@ -854,64 +1017,6 @@ export function GitPanel({ visible }: GitPanelProps) {
         }}
         onConfirm={handleDeleteBranch}
       />
-    </div>
-  )
-}
-
-interface FileSectionProps {
-  label: string
-  entries: GitStatusEntry[]
-  staged: boolean
-  mutating: boolean
-  onOpen: (e: GitStatusEntry) => void
-  onAction: (e: GitStatusEntry) => void
-  onActionAll: () => void
-  actionGlyph: string
-  actionTitle: string
-  actionAllTitle: string
-  onDiscard?: (e: GitStatusEntry) => void
-  discardTitle?: string
-}
-
-function FileSection({
-  label, entries, staged, mutating,
-  onOpen, onAction, onActionAll, actionGlyph, actionTitle, actionAllTitle,
-  onDiscard, discardTitle,
-}: FileSectionProps) {
-  if (entries.length === 0) return null
-  return (
-    <div className="git-section">
-      <div className="git-section-header">
-        <span>{label}</span>
-        <span className="git-count-badge">{entries.length}</span>
-        <span className="title-bar-spacer" />
-        <button className="git-row-btn" disabled={mutating} onClick={onActionAll} title={actionAllTitle}>
-          {actionGlyph}
-        </button>
-      </div>
-      {entries.map((e) => (
-        <div key={`${staged ? 's' : 'u'}:${e.path}`} className="git-file-row" onClick={() => onOpen(e)}>
-          <span className={`git-status-char git-status-${e.conflicted ? 'conflict' : statusChar(e, staged)}`}>
-            {statusChar(e, staged)}
-          </span>
-          {/* 容器 direction:rtl 只为左侧省略号；bdi 隔离避免前导 . 等中性字符被 bidi 重排 */}
-          <span className="git-file-path" title={e.orig_path ? `${e.orig_path} → ${e.path}` : e.path}>
-            <bdi dir="ltr">{e.path}</bdi>
-          </span>
-          <span className="git-file-actions" onClick={(ev) => ev.stopPropagation()}>
-            {onDiscard && !e.conflicted && (
-              <button className="git-row-btn git-row-btn-danger" disabled={mutating} onClick={() => onDiscard(e)} title={discardTitle}>
-                ↺
-              </button>
-            )}
-            {!e.conflicted && (
-              <button className="git-row-btn" disabled={mutating} onClick={() => onAction(e)} title={actionTitle}>
-                {actionGlyph}
-              </button>
-            )}
-          </span>
-        </div>
-      ))}
     </div>
   )
 }

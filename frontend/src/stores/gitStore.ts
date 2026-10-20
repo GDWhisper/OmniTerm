@@ -61,9 +61,12 @@ export const useGitStore = create<GitState>((set, get) => ({
     set({ mutating: true })
     try {
       await op()
-      await get().fetchStatus(bind)
       return true
     } finally {
+      // A failed mutation can still change repo state (merge/rebase/cherry-pick
+      // conflicts leave an in-progress operation), so status converges on both
+      // paths before the busy flag is released.
+      await get().fetchStatus(bind)
       set({ mutating: false })
     }
   },

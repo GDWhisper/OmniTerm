@@ -23,6 +23,7 @@ pub fn routes() -> Router<AppState> {
         .route("/git/log", get(git_log))
         .route("/git/show", get(git_show))
         .route("/git/branches", get(git_branches))
+        .route("/git/range", get(git_range))
         .route("/git/stage", post(git_stage))
         .route("/git/unstage", post(git_unstage))
         .route("/git/commit", post(git_commit))
@@ -36,6 +37,10 @@ pub fn routes() -> Router<AppState> {
         .route("/git/cherry-pick", post(git_cherry_pick))
         .route("/git/revert-commit", post(git_revert_commit))
         .route("/git/reset", post(git_reset))
+        .route("/git/merge", post(git_merge))
+        .route("/git/rebase", post(git_rebase))
+        .route("/git/operation/continue", post(git_operation_continue))
+        .route("/git/operation/abort", post(git_operation_abort))
         .route("/git/checkout", post(git_checkout))
         .route("/git/branch", post(git_create_branch))
         .route("/git/branch/delete", post(git_delete_branch))
@@ -63,6 +68,8 @@ struct RepoQuery {
     limit: Option<u32>,
     // show params
     sha: Option<String>,
+    // range params
+    base: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -255,6 +262,42 @@ async fn git_branches(State(state): State<AppState>, Query(q): Query<RepoQuery>)
     match repo::branches(&root).await {
         Ok(list) => (StatusCode::OK, Json(json!({ "branches": list }))).into_response(),
         Err(e) => git_error_response(e),
+    }
+}
+
+/// Branch comparison against HEAD. Without `path` returns the merge-base,
+/// changed-file list and full range diff; with `path` returns one file.
+async fn git_range(State(state): State<AppState>, Query(q): Query<RepoQuery>) -> Response {
+    let Some(base) = q.base.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "base required" })))
+            .into_response();
+    };
+    let path = q.path.clone();
+    let root = bind_repo!(state, q);
+    match path {
+        Some(path) => match repo::range_file_diff(&root, &base, &path).await {
+            Ok((diff, truncated)) => (
+                StatusCode::OK,
+                Json(json!({ "diff": diff, "truncated": truncated, "root": root })),
+            )
+                .into_response(),
+            Err(e) => git_error_response(e),
+        },
+        None => match repo::range_overview(&root, &base).await {
+            Ok(data) => (
+                StatusCode::OK,
+                Json(json!({
+                    "merge_base": data.merge_base,
+                    "files": data.files,
+                    "files_truncated": data.files_truncated,
+                    "diff": data.diff,
+                    "truncated": data.truncated,
+                    "root": root,
+                })),
+            )
+                .into_response(),
+            Err(e) => git_error_response(e),
+        },
     }
 }
 
@@ -455,6 +498,50 @@ async fn git_reset(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Re
     };
     let root = bind_repo!(state, b);
     match repo::reset_to(&root, &sha, mode).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_merge(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(branch) = b.branch.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "branch required" })))
+            .into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::merge_branch(&root, &branch).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_rebase(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(branch) = b.branch.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "branch required" })))
+            .into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::rebase_branch(&root, &branch).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+/// Continue whatever operation is on disk (kind is detected server-side).
+async fn git_operation_continue(
+    State(state): State<AppState>,
+    Json(b): Json<RepoBody>,
+) -> Response {
+    let root = bind_repo!(state, b);
+    match repo::operation_continue(&root).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_operation_abort(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let root = bind_repo!(state, b);
+    match repo::operation_abort(&root).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
         Err(e) => git_error_response(e),
     }

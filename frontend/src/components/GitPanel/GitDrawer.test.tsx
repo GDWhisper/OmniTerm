@@ -7,6 +7,7 @@ import { GitDrawer, type GitDrawerTarget } from './GitDrawer'
 const gitHunks = vi.fn()
 const gitDiff = vi.fn()
 const gitShow = vi.fn()
+const gitRangeDiff = vi.fn()
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -17,6 +18,7 @@ vi.mock('../../api/client', () => ({
     gitHunks: (...args: unknown[]) => gitHunks(...args),
     gitDiff: (...args: unknown[]) => gitDiff(...args),
     gitShow: (...args: unknown[]) => gitShow(...args),
+    gitRangeDiff: (...args: unknown[]) => gitRangeDiff(...args),
   },
 }))
 
@@ -86,6 +88,7 @@ beforeEach(() => {
     root: '/repo',
   }))
   gitDiff.mockReset().mockResolvedValue({ diff: RAW, truncated: false, root: '/repo' })
+  gitRangeDiff.mockReset().mockResolvedValue({ diff: RAW, truncated: false, root: '/repo' })
   gitShow.mockReset().mockResolvedValue({
     sha: 'abc', short_sha: 'abc', author: 'A', email: 'a@b', date: new Date().toISOString(),
     message: 'msg', diff: RAW, truncated: false,
@@ -176,6 +179,21 @@ describe('GitDrawer hunk flow', () => {
 
     expect(gitShow).toHaveBeenCalled()
     expect(gitHunks).not.toHaveBeenCalled()
+    expect(container.querySelectorAll('.git-row-btn')).toHaveLength(0)
+  })
+
+  it('loads range diffs read-only from the range endpoint', async () => {
+    renderDrawer({ kind: 'range', base: 'main', path: 'a.txt' })
+    await act(async () => {})
+
+    expect(gitRangeDiff).toHaveBeenCalledWith(
+      { workspaceId: 'w1' },
+      'main',
+      'a.txt',
+    )
+    expect(gitHunks).not.toHaveBeenCalled()
+    expect(gitDiff).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('git.rangeLabel')
     expect(container.querySelectorAll('.git-row-btn')).toHaveLength(0)
   })
 })

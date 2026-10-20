@@ -51,10 +51,13 @@ describe('gitStore.mutate', () => {
     expect(gitStatus).toHaveBeenCalledWith(bind)
   })
 
-  it('rethrows a failed mutation and releases the busy flag', async () => {
+  it('rethrows a failed mutation, refreshes status and releases the busy flag', async () => {
     const op = vi.fn(async () => { throw new Error('boom') })
     await expect(useGitStore.getState().mutate(bind, op)).rejects.toThrow('boom')
     expect(useGitStore.getState().mutating).toBe(false)
-    expect(gitStatus).not.toHaveBeenCalled()
+    // A failed merge/rebase leaves a paused operation behind; the panel must
+    // learn about it immediately instead of waiting for the next poll.
+    expect(gitStatus).toHaveBeenCalledTimes(1)
+    expect(useGitStore.getState().status).toMatchObject({ branch: 'dev' })
   })
 })

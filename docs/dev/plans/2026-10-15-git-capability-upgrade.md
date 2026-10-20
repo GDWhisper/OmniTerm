@@ -1,6 +1,6 @@
 # Git 面板能力提升计划（对标 openchamber-v2）
 
-> 状态：**Phase 1 + Phase 2 + AI commit message 已实施**（Phase 1 2026-10-19、Phase 2 2026-10-20）；Phase 3 待排期
+> 状态：**Phase 1 + Phase 2 + Phase 3 + AI commit message 已实施**（Phase 1 2026-10-19、Phase 2 2026-10-20、Phase 3 2026-10-20）；P2 候补按信号触发
 > 触发条件：修改 `src/git/repo.rs`、`src/git/mod.rs`、`src/api/git.rs`、`frontend/src/components/GitPanel/`（GitPanel/GitDrawer/DiffView/diffParser）、`frontend/src/stores/gitStore.ts` 任一项前**必读**
 > 关联：`docs/dev/plans/archive/2026-07-26-git-panel.md`（v1 设计与排除清单——本计划重开其中多项，实施后需在该归档文档加勘误指针）、`docs/architecture/backend.md`（git 端点章）、`docs/architecture/frontend.md`（GitPanel 结构）
 > 来源：2026-10-15 对 `/home/pax/coding/research/openchamber-v2`（VSCode SCM 级 git 实现：服务端 59 文件 + UI ~12000 行 + GitHub 全集成）的逐文件对比研究，证据行号随附各节
@@ -203,7 +203,7 @@
   6. 移动端（coarse pointer）按钮常显；rename/新增/删除/二进制/大 diff 截断态无 hunk 按钮。
 - 自动化验证（2026-10-20）：`src/git/repo.rs` 45 例单测全绿（含 staging 两个 hunk、行号重算、CRLF/无尾换行、Unicode 路径、锁重试）；前端新增 DiffView/GitDrawer/gitStore/client 共 27 例全绿；真机 E2E 走通 UI 的 hunk stage → unstage → revert（二次确认）与 stale toast + 抽屉自动刷新，API 侧 stage/unstage/revert/stale 均按预期落盘。
 
-### Phase 3：协作批
+### Phase 3：协作批 ✅ 2026-10-20
 
 **7）分支对比（range diff）** —— 实现见 D7。测试：merge-base 正确性、空 diff、base 不存在 422、截断标记。
 
@@ -211,6 +211,30 @@
 - 端点：`POST /git/merge`、`/git/rebase`（均带 branch 参数，`reject_option_like`；rebase 前端强度确认——历史重写警示）、`POST /git/operation/continue`、`/git/operation/abort`（按 status.in_progress 分派）。
 - 前端：中断态横幅（ABORT/CONTINUE + 冲突文件数）、分支菜单加「合并到当前分支」「变基到…」。
 - 测试：三态渲染（无中断/merge 中/rebase 中）；abort 后 `.git` 状态清理、横幅消失；冲突未解决时 CONTINUE 禁用；rebase 完成后的线性历史断言。
+
+**实施记录（Phase 3，2026-10-20）**
+
+- 后端：`/git/status` 新增 `in_progress:{kind,conflicted}|null`，用一次 `rev-parse --git-path` 探测（兼容 linked worktree）；`GET /git/range`（`{merge_base,files,files_truncated,diff,truncated,root}` / 单文件模式）；`POST /git/merge|rebase|operation/continue|operation/abort`；`src/git/repo.rs` 新增 `probe_operation`、`resolve_range_base`、`parse_name_status_z`、`merge_branch`、`rebase_branch`、`operation_continue/abort` 与错误码 `invalid_base|no_merge_base|invalid_branch|invalid_path|no_operation|operation_in_progress`。
+- 前端：`OperationBanner.tsx` 常驻横幅（冲突数、CONTINUE 禁用、ABORT 二次确认）；分支行内合并/变基按钮（变基弹确认，警告历史重写且面板不提供 force push）；CHANGES 顶栏 BASE 选择器 → 只读 `RangeFileSection`（隐藏提交框）+ range 抽屉；`GitDrawer` target 新增 `{kind:'range'}`；`FileSections.tsx` 抽取共享文件行。`gitStore.mutate` 改为成功与失败都在 finally 刷新 status。
+- 实施偏差/细化：
+  1. `rebase-apply/` 与 `git am` 共用目录：按 `applying`/`rebasing` 标记区分，`am` 作为独立 kind 并提供 `git am --continue|--abort`，避免把 am 当成 rebase 执行错误命令。
+  2. range 文件列表设 1000 条上限并返回 `files_truncated`（性能红线 P1，计划原文未覆盖）；rename 带 `orig_path`。
+  3. range 视图为只读：隐藏 STAGED/CHANGES 与提交框；数据只在选择 BASE / 手动刷新 / ACP 编辑提示时拉取，不参与 5s 轮询（全量 diff 太重）。
+  4. BASE 仅列本地分支并排除当前分支（与 `branches` 端点一致）；中断态禁用 BASE 与 checkout/merge/rebase。
+  5. continue 命令设置 `GIT_EDITOR=true` / `GIT_SEQUENCE_EDITOR=true`，保证后端无 TTY 时不会拉起编辑器；Windows 等价物待 `2026-10-17-windows-desktop-first` 计划。
+  6. `gitStore.mutate` 失败也刷新 status（计划外但必需）：merge/rebase/cherry-pick 冲突会留下新的中断态，横幅必须立即出现而不是等 5s 轮询。
+  7. `/git/operation/*` 不接受客户端传入 kind，每请求重新探测；continue 仍有冲突时返回 `conflict`。
+  8. BASE 选择器独立成 `.git-rangebar` 一行（与 viewbar 并排时在 240px 窄栏会被挤压），空选项文案缩短为「不对比/none」；range 抽屉标题从错误的 `commit` 修正为 `diff`；ABORT 弹窗标题改为「中止当前操作」（避免与 kind 文案「X 进行中」叠加成病句）。
+- 手动回归：
+  1. 分支菜单合并 → 冲突横幅出现（冲突计数正确）、CONTINUE 禁用；在编辑器解决并 stage 后在横幅 CONTINUE → 横幅消失、历史出现 merge commit。
+  2. 变基确认弹窗 → 冲突 → ABORT → 分支与 HEAD 恢复；干净变基后历史为线性、无 merge commit。
+  3. 终端完成冲突解决（git add + commit）后 ≤5s 横幅自动消失。
+  4. linked worktree 中制造 merge 冲突，绑定该 worktree 的会话能看到横幅，主工作区不受影响。
+  5. BASE 选择分支 → 只读文件列表（含 rename 状态与 orig_path tooltip）→ 点文件打开只读 diff 抽屉 → 清除 BASE 恢复 CHANGES 与提交框；分支在终端被删除后选择 → 提示 `invalid_base` 并回到无对比态。
+  6. 中断态下分支 checkout/merge/rebase 与 BASE 选择器均不可用；staging/编辑器仍可用于解决冲突。
+  7. 240px 窄栏与移动端横幅可换行、ABORT/CONTINUE 可点。
+- 自动化验证（2026-10-20）：`src/git/repo.rs` 58 例单测全绿（新增 merge/rebase/cherry-pick 中断态、abort/continue、worktree 探测、am 区分、range 解析与 base 校验、refine_error 映射）；前端新增 `OperationBanner` / `GitPanel.phase3` / `GitDrawer` range / client / gitStore 共 24 例，全量 1301 例通过。
+- 真机验证（2026-10-20，临时仓库 + `./dev.sh` + agent-browser）：API 侧 range/merge 冲突/continue/abort/rebase 冲突（detached HEAD 正确上报）均按预期；UI 侧 BASE 选择 feature 显示 `FEATURE ▸ HEAD` 只读列表（A/M 状态）与 range 抽屉（`feature...HEAD` 标签、无 hunk/ctx 按钮），清除 BASE 恢复提交框；分支菜单变基弹历史重写确认（取消不改动）；合并冲突后横幅显示「MERGE IN PROGRESS / 1 conflicted file(s) remain」，CONTINUE 禁用、ABORT 弹确认、BASE 与分支操作用不可用；终端 `git add` 解决后 CONTINUE 成功、横幅消失并生成 merge commit。
 
 ### 独立项：AI commit message（✅ 2026-10-19）
 

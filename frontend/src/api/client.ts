@@ -851,6 +851,14 @@ export const api = {
     ),
   gitShow: (bind: GitBind, sha: string) =>
     request<GitCommitDetail>(`/git/show?${gitBindQuery(bind)}&sha=${encodeURIComponent(sha)}`),
+  gitRangeFiles: (bind: GitBind, base: string) =>
+    request<GitRangeOverview>(
+      `/git/range?${gitBindQuery(bind)}&base=${encodeURIComponent(base)}`,
+    ),
+  gitRangeDiff: (bind: GitBind, base: string, path: string) =>
+    request<{ diff: string; truncated: boolean; root: string }>(
+      `/git/range?${gitBindQuery(bind)}&base=${encodeURIComponent(base)}&path=${encodeURIComponent(path)}`,
+    ),
   gitBranches: (bind: GitBind) =>
     request<{ branches: GitBranch[] } | { is_repo: false }>(`/git/branches?${gitBindQuery(bind)}`),
   gitStage: (bind: GitBind, paths: string[]) =>
@@ -883,6 +891,22 @@ export const api = {
     request('/git/revert-commit', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), sha }), silent: true }),
   gitReset: (bind: GitBind, sha: string, mode: 'soft' | 'mixed') =>
     request('/git/reset', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), sha, mode }), silent: true }),
+  gitMerge: (bind: GitBind, branch: string) =>
+    request('/git/merge', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), branch }), silent: true }),
+  gitRebase: (bind: GitBind, branch: string) =>
+    request('/git/rebase', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), branch }), silent: true }),
+  gitOperationContinue: (bind: GitBind) =>
+    request('/git/operation/continue', {
+      method: 'POST',
+      body: JSON.stringify(gitBindBody(bind)),
+      silent: true,
+    }),
+  gitOperationAbort: (bind: GitBind) =>
+    request('/git/operation/abort', {
+      method: 'POST',
+      body: JSON.stringify(gitBindBody(bind)),
+      silent: true,
+    }),
   gitGenerateCommitMessage: (bind: GitBind) =>
     request<AiCommitGeneratedMessage>('/git/commit-message', {
       method: 'POST',
@@ -938,6 +962,15 @@ export interface GitStatusEntry {
   conflicted: boolean
 }
 
+export type GitOperationKind = 'merge' | 'rebase' | 'cherry_pick' | 'revert' | 'am'
+
+/** Paused merge/rebase/cherry-pick/revert/am detected on disk (plan D5). */
+export interface GitInProgress {
+  kind: GitOperationKind
+  /** Unmerged entries currently in the index. */
+  conflicted: number
+}
+
 export interface GitStatus {
   is_repo: boolean
   repo_root?: string
@@ -947,6 +980,7 @@ export interface GitStatus {
   ahead?: number
   behind?: number
   entries?: GitStatusEntry[]
+  in_progress?: GitInProgress | null
 }
 
 export interface GitLogEntry {
@@ -996,6 +1030,25 @@ export interface GitHunksResponse {
   hunks: GitHunk[]
   /** Effective context-line count used to build `hunks` (server-clamped). */
   context_lines: number
+  root: string
+}
+
+/** One changed file in a branch comparison (`git diff --name-status`). */
+export interface GitRangeFile {
+  path: string
+  /** Rename/copy source when `status` is `R`/`C`. */
+  orig_path?: string
+  /** Single status letter: A/M/D/R/C/T/U. */
+  status: string
+}
+
+export interface GitRangeOverview {
+  merge_base: string
+  files: GitRangeFile[]
+  /** True when the file list hit the server-side cap. */
+  files_truncated: boolean
+  diff: string
+  truncated: boolean
   root: string
 }
 

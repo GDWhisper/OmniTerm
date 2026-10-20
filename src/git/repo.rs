@@ -24,6 +24,9 @@ pub const AI_COMMIT_STYLE_SUBJECTS: usize = 10;
 /// without limit (`git stash` never prunes); the panel only needs the recent
 /// window and the response must stay bounded (performance red line P1).
 const MAX_STASH_ENTRIES: usize = 100;
+/// Upper bound on files returned by a branch comparison. Range diffs can cover
+/// an entire history; the response must stay bounded (performance red line P1).
+const MAX_RANGE_FILES: usize = 1000;
 /// Delays before retrying a write that lost the race for `index.lock`.
 /// Two retries (3 attempts total) tolerate a user's terminal git command
 /// without masking a genuinely stuck lock (ADR-D1: never delete the lock).
@@ -60,6 +63,61 @@ pub struct RepoStatus {
     pub ahead: i64,
     pub behind: i64,
     pub entries: Vec<StatusEntry>,
+    /// Merge/rebase/cherry-pick/revert/am state, so the panel can offer
+    /// abort/continue even when the operation was started in the terminal.
+    pub in_progress: Option<InProgress>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InProgress {
+    /// `merge` | `rebase` | `cherry_pick` | `revert` | `am`.
+    pub kind: String,
+    /// Number of unmerged entries in the index.
+    pub conflicted: usize,
+}
+
+/// Git operation kinds that can pause with state on disk (plan D5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperationKind {
+    Merge,
+    Rebase,
+    CherryPick,
+    Revert,
+    Am,
+}
+
+impl OperationKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Merge => "merge",
+            Self::Rebase => "rebase",
+            Self::CherryPick => "cherry_pick",
+            Self::Revert => "revert",
+            Self::Am => "am",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "merge" => Some(Self::Merge),
+            "rebase" => Some(Self::Rebase),
+            "cherry_pick" => Some(Self::CherryPick),
+            "revert" => Some(Self::Revert),
+            "am" => Some(Self::Am),
+            _ => None,
+        }
+    }
+
+    /// Subcommand name used to build `git <name> --continue|--abort`.
+    fn cli_name(self) -> &'static str {
+        match self {
+            Self::Merge => "merge",
+            Self::Rebase => "rebase",
+            Self::CherryPick => "cherry-pick",
+            Self::Revert => "revert",
+            Self::Am => "am",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,6 +148,26 @@ pub struct BranchInfo {
     /// Short upstream ref (for example `origin/dev`) when the branch tracks one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
+}
+
+/// One changed file in a branch comparison (`git diff --name-status`).
+#[derive(Debug, Clone, Serialize)]
+pub struct RangeFile {
+    pub path: String,
+    /// Rename/copy source when `status` is `R`/`C`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orig_path: Option<String>,
+    /// Single status letter (A/M/D/R/C/T/U).
+    pub status: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RangeOverview {
+    pub merge_base: String,
+    pub files: Vec<RangeFile>,
+    pub files_truncated: bool,
+    pub diff: String,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -142,7 +220,9 @@ pub struct DiscardFile {
 pub struct GitError {
     /// One of: `auth`, `non_fast_forward`, `no_upstream`, `dirty_worktree`,
     /// `timeout`, `not_merged`, `conflict`, `nothing_to_stash`, `nothing_staged`,
-    /// `stale_hunk`, `invalid_hunk`, `generic`.
+    /// `stale_hunk`, `invalid_hunk`, `invalid_base`, `no_merge_base`,
+    /// `invalid_branch`, `invalid_path`, `no_operation`, `operation_in_progress`,
+    /// `generic`.
     pub code: String,
     pub message: String,
 }
@@ -156,16 +236,51 @@ impl std::fmt::Display for GitError {
 impl std::error::Error for GitError {}
 
 impl GitError {
+    fn coded(code: &'static str, message: impl Into<String>) -> Self {
+        Self { code: code.into(), message: message.into() }
+    }
+
     fn generic(message: impl Into<String>) -> Self {
-        Self { code: "generic".into(), message: message.into() }
+        Self::coded("generic", message)
     }
 
     pub fn invalid_hunk(message: impl Into<String>) -> Self {
-        Self { code: "invalid_hunk".into(), message: message.into() }
+        Self::coded("invalid_hunk", message)
     }
 
     pub fn stale_hunk(message: impl Into<String>) -> Self {
-        Self { code: "stale_hunk".into(), message: message.into() }
+        Self::coded("stale_hunk", message)
+    }
+
+    fn invalid_base(message: impl Into<String>) -> Self {
+        Self::coded("invalid_base", message)
+    }
+
+    fn no_merge_base(message: impl Into<String>) -> Self {
+        Self::coded("no_merge_base", message)
+    }
+
+    fn invalid_branch(message: impl Into<String>) -> Self {
+        Self::coded("invalid_branch", message)
+    }
+
+    fn invalid_path(message: impl Into<String>) -> Self {
+        Self::coded("invalid_path", message)
+    }
+
+    fn no_operation() -> Self {
+        Self::coded("no_operation", "no merge or rebase is in progress")
+    }
+
+    fn operation_in_progress(kind: &str) -> Self {
+        Self::coded(
+            "operation_in_progress",
+            format!("{kind} is already in progress — continue or abort it first"),
+        )
+    }
+
+    fn conflict(message: impl Into<String>) -> Self {
+        Self::coded("conflict", message)
     }
 }
 
@@ -255,15 +370,26 @@ fn refine_error(stderr: &str) -> GitError {
         || lower.contains("--set-upstream")
     {
         "no_upstream"
-    } else if lower.contains("would be overwritten by checkout")
+    } else if lower.contains("not concluded your merge")
+        || lower.contains("in progress")
+        || lower.contains("rebase-merge directory")
+    {
+        "operation_in_progress"
+    } else if lower.contains("would be overwritten by")
+        || lower.contains("cannot rebase")
+        || lower.contains("uncommitted changes")
         || lower.contains("commit your changes or stash them")
     {
         "dirty_worktree"
     } else if lower.contains("not fully merged") {
         // `git branch -d` refusal: the UI offers an explicit force delete.
         "not_merged"
-    } else if lower.contains("conflict") {
-        // stash apply/pop, cherry-pick, revert and rebase all report CONFLICT.
+    } else if lower.contains("unmerged files")
+        || lower.contains("resolve your current index")
+        || lower.contains("conflict")
+    {
+        // stash apply/pop, cherry-pick, revert and rebase all report CONFLICT;
+        // `--continue` with unresolved entries reports unmerged files instead.
         "conflict"
     } else {
         "generic"
@@ -297,10 +423,10 @@ fn validate_commit_sha(sha: &str) -> GitResult<()> {
     Ok(())
 }
 
-/// Diff paths always come from `git status` and are relative to the repo root.
-/// Reject anything that could escape the repo or be parsed as an option.
-fn validate_repo_path(path: &str) -> GitResult<()> {
-    let invalid = path.is_empty()
+/// Whether a path is safe to hand to git: relative to the repo root, not
+/// option-like, and unable to escape the repository.
+fn is_relative_repo_path(path: &str) -> bool {
+    !(path.is_empty()
         || path.starts_with('-')
         || Path::new(path).is_absolute()
         || Path::new(path).components().any(|component| {
@@ -310,9 +436,23 @@ fn validate_repo_path(path: &str) -> GitResult<()> {
                     | std::path::Component::RootDir
                     | std::path::Component::Prefix(_)
             )
-        });
-    if invalid {
+        }))
+}
+
+/// Diff paths always come from `git status` and are relative to the repo root.
+/// Reject anything that could escape the repo or be parsed as an option.
+fn validate_repo_path(path: &str) -> GitResult<()> {
+    if !is_relative_repo_path(path) {
         return Err(GitError::invalid_hunk(format!(
+            "path must be relative to the repo root: {path:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_range_path(path: &str) -> GitResult<()> {
+    if !is_relative_repo_path(path) {
+        return Err(GitError::invalid_path(format!(
             "path must be relative to the repo root: {path:?}"
         )));
     }
@@ -323,10 +463,10 @@ pub fn normalize_context_lines(value: Option<u32>) -> u32 {
     value.unwrap_or(DEFAULT_CONTEXT_LINES).clamp(1, MAX_CONTEXT_LINES)
 }
 
-/// Diff flags shared by display and hunk extraction. Prefixes and the full
-/// index id are forced so a patch can be fed back to `git apply` regardless
-/// of the user's `diff.noprefix` / external-diff configuration.
-fn tracked_diff_command(root: &str, path: &str, staged: bool, context_lines: u32) -> Command {
+/// Diff flags shared by display, hunk extraction and branch comparison.
+/// Prefixes and the full index id are forced so a patch can be fed back to
+/// `git apply` regardless of the user's `diff.noprefix` / external-diff config.
+fn diff_command(root: &str) -> Command {
     let mut cmd = git_command(root);
     cmd.args([
         "diff",
@@ -337,6 +477,11 @@ fn tracked_diff_command(root: &str, path: &str, staged: bool, context_lines: u32
         "--dst-prefix=b/",
         "--full-index",
     ]);
+    cmd
+}
+
+fn tracked_diff_command(root: &str, path: &str, staged: bool, context_lines: u32) -> Command {
+    let mut cmd = diff_command(root);
     cmd.arg(format!("-U{context_lines}"));
     if staged {
         cmd.arg("--cached");
@@ -367,12 +512,81 @@ pub async fn resolve_repo_root(dir: &str) -> Option<String> {
     if root.is_empty() { None } else { Some(root) }
 }
 
+/// Detect a merge/rebase/cherry-pick/revert/am that paused with state on disk.
+///
+/// One `rev-parse --git-path` call resolves all probe paths through git itself,
+/// so linked worktrees (where `.git` is a file and the real git dir lives under
+/// `.git/worktrees/<name>`) work without special cases. Relative results are
+/// resolved against the repo root. Probe failures degrade to `None`: a status
+/// poll must not fail because of this best-effort field.
+async fn probe_operation(root: &str) -> Option<OperationKind> {
+    let output = run(git_command(root).args([
+        "rev-parse",
+        "--git-path",
+        "MERGE_HEAD",
+        "--git-path",
+        "CHERRY_PICK_HEAD",
+        "--git-path",
+        "REVERT_HEAD",
+        "--git-path",
+        "rebase-merge",
+        "--git-path",
+        "rebase-apply",
+    ]))
+    .await
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let paths: Vec<&str> = stdout.lines().collect();
+    if paths.len() < 5 {
+        return None;
+    }
+    let resolve = |raw: &str| {
+        let path = Path::new(raw);
+        if path.is_absolute() { path.to_path_buf() } else { Path::new(root).join(path) }
+    };
+    let merge = resolve(paths[0]);
+    let cherry = resolve(paths[1]);
+    let revert = resolve(paths[2]);
+    let rebase_merge = resolve(paths[3]);
+    let rebase_apply = resolve(paths[4]);
+
+    if rebase_merge.exists() {
+        return Some(OperationKind::Rebase);
+    }
+    if rebase_apply.exists() {
+        // `rebase-apply` is shared by `git am` and rebase's apply backend;
+        // only `am` creates the `applying` marker.
+        if rebase_apply.join("applying").exists() {
+            return Some(OperationKind::Am);
+        }
+        return Some(OperationKind::Rebase);
+    }
+    if merge.exists() {
+        return Some(OperationKind::Merge);
+    }
+    if cherry.exists() {
+        return Some(OperationKind::CherryPick);
+    }
+    if revert.exists() {
+        return Some(OperationKind::Revert);
+    }
+    None
+}
+
 pub async fn status(root: &str) -> GitResult<RepoStatus> {
     let output =
         run(git_command(root).args(["status", "--porcelain=v2", "--branch", "-z"])).await?;
     ensure_success(&output)?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_status_v2(root, &stdout))
+    let mut st = parse_status_v2(root, &stdout);
+    let conflicted = st.entries.iter().filter(|entry| entry.conflicted).count();
+    st.in_progress = probe_operation(root)
+        .await
+        .map(|kind| InProgress { kind: kind.as_str().to_string(), conflicted });
+    Ok(st)
 }
 
 fn parse_status_v2(root: &str, raw: &str) -> RepoStatus {
@@ -385,6 +599,7 @@ fn parse_status_v2(root: &str, raw: &str) -> RepoStatus {
         ahead: 0,
         behind: 0,
         entries: Vec::new(),
+        in_progress: None,
     };
 
     // `-z` terminates records with NUL; rename records embed a second
@@ -894,6 +1109,96 @@ pub async fn branches(root: &str) -> GitResult<Vec<BranchInfo>> {
         .collect())
 }
 
+/// Validate a base ref and resolve the merge-base it shares with HEAD.
+async fn resolve_range_base(root: &str, base: &str) -> GitResult<String> {
+    if base.is_empty() || base.starts_with('-') {
+        return Err(GitError::invalid_base(format!("invalid base ref: {base:?}")));
+    }
+    let spec = format!("{base}^{{commit}}");
+    let verified = run(git_command(root).args(["rev-parse", "--verify", "--quiet", &spec])).await?;
+    if !verified.status.success() {
+        return Err(GitError::invalid_base(format!("base ref not found: {base}")));
+    }
+    let sha = String::from_utf8_lossy(&verified.stdout).trim().to_string();
+    if sha.is_empty() {
+        return Err(GitError::invalid_base(format!("base ref not found: {base}")));
+    }
+    let merge_base = run(git_command(root).args(["merge-base", &sha, "HEAD"])).await?;
+    let value = String::from_utf8_lossy(&merge_base.stdout).trim().to_string();
+    if !merge_base.status.success() || value.is_empty() {
+        return Err(GitError::no_merge_base(format!("{base} and HEAD have no common ancestor")));
+    }
+    Ok(value)
+}
+
+/// Parse `git diff --name-status -z` output. Rename/copy records carry the
+/// source path as an extra NUL-separated field before the destination.
+fn parse_name_status_z(raw: &str, cap: usize) -> (Vec<RangeFile>, bool) {
+    let mut fields = raw.split('\0');
+    let mut files = Vec::new();
+    let mut truncated = false;
+    while let Some(status) = fields.next() {
+        if status.is_empty() {
+            continue;
+        }
+        let letter = status.chars().next().unwrap_or('?').to_string();
+        let (orig_path, path) = if status.starts_with('R') || status.starts_with('C') {
+            let (Some(orig), Some(path)) = (fields.next(), fields.next()) else {
+                break;
+            };
+            (Some(orig.to_string()), path.to_string())
+        } else {
+            let Some(path) = fields.next() else {
+                break;
+            };
+            (None, path.to_string())
+        };
+        if path.is_empty() {
+            continue;
+        }
+        if files.len() >= cap {
+            truncated = true;
+            break;
+        }
+        files.push(RangeFile { path, orig_path, status: letter });
+    }
+    (files, truncated)
+}
+
+/// Branch comparison: merge-base, changed files and the full range diff.
+/// `base` is any commit-ish; the diff is taken from the resolved merge-base to
+/// HEAD (equivalent to `git diff base...HEAD`).
+pub async fn range_overview(root: &str, base: &str) -> GitResult<RangeOverview> {
+    let merge_base = resolve_range_base(root, base).await?;
+    let range = format!("{merge_base}..HEAD");
+    let names = run(git_command(root).args(["diff", "--name-status", "-z", "-M", &range])).await?;
+    ensure_success(&names)?;
+    let raw_names = String::from_utf8_lossy(&names.stdout);
+    let (files, files_truncated) = parse_name_status_z(&raw_names, MAX_RANGE_FILES);
+
+    let diff_output = run(diff_command(root).args(["-M", &range])).await?;
+    ensure_success(&diff_output)?;
+    let raw_diff = String::from_utf8_lossy(&diff_output.stdout);
+    let (diff, truncated) = truncate_diff(&raw_diff);
+
+    Ok(RangeOverview { merge_base, files, files_truncated, diff, truncated })
+}
+
+/// Single-file diff within a branch comparison.
+pub async fn range_file_diff(root: &str, base: &str, path: &str) -> GitResult<(String, bool)> {
+    validate_range_path(path)?;
+    let merge_base = resolve_range_base(root, base).await?;
+    let range = format!("{merge_base}..HEAD");
+    let output = run(diff_command(root)
+        // Paths come from `--name-status`, but a filename may contain glob
+        // characters; never let git treat it as a pathspec pattern.
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .args(["-M", &range, "--", path]))
+    .await?;
+    ensure_success(&output)?;
+    Ok(truncate_diff(&String::from_utf8_lossy(&output.stdout)))
+}
+
 pub async fn delete_branch(root: &str, name: &str, force: bool) -> GitResult<()> {
     reject_option_like(name)?;
     let flag = if force { "-D" } else { "-d" };
@@ -1118,6 +1423,91 @@ pub async fn checkout_branch(root: &str, name: &str) -> GitResult<()> {
 pub async fn create_branch(root: &str, name: &str) -> GitResult<()> {
     reject_option_like(name)?;
     let output = run_write(git_command(root).args(["checkout", "-b", name])).await?;
+    ensure_success(&output)
+}
+
+async fn verify_branch(root: &str, branch: &str) -> GitResult<()> {
+    if branch.is_empty() || branch.starts_with('-') {
+        return Err(GitError::invalid_branch(format!("invalid branch: {branch:?}")));
+    }
+    let spec = format!("{branch}^{{commit}}");
+    let output = run(git_command(root).args(["rev-parse", "--verify", "--quiet", &spec])).await?;
+    if !output.status.success() {
+        return Err(GitError::invalid_branch(format!("branch not found: {branch}")));
+    }
+    Ok(())
+}
+
+/// Merge `branch` into the current branch. `--no-edit` keeps the backend
+/// non-interactive; a conflict leaves normal merge state for the banner.
+pub async fn merge_branch(root: &str, branch: &str) -> GitResult<()> {
+    verify_branch(root, branch).await?;
+    if let Some(kind) = probe_operation(root).await {
+        return Err(GitError::operation_in_progress(kind.as_str()));
+    }
+    let output =
+        run_write(git_command(root).args(["merge", "--no-edit", "--no-autostash", "--", branch]))
+            .await?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(refine_error(&error_message(&output)))
+}
+
+/// Rebase the current branch onto `branch`. This rewrites history; the
+/// frontend requires an explicit confirmation. No `--` separator: branch names
+/// cannot start with `-` (checked by `verify_branch`) and older git versions
+/// do not all accept it for rebase.
+pub async fn rebase_branch(root: &str, branch: &str) -> GitResult<()> {
+    verify_branch(root, branch).await?;
+    if let Some(kind) = probe_operation(root).await {
+        return Err(GitError::operation_in_progress(kind.as_str()));
+    }
+    let output = run_write(git_command(root).args(["rebase", "--no-autostash", branch])).await?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(refine_error(&error_message(&output)))
+}
+
+async fn operation_state(root: &str) -> GitResult<(OperationKind, usize)> {
+    let st = status(root).await?;
+    let Some(in_progress) = st.in_progress else {
+        return Err(GitError::no_operation());
+    };
+    let Some(kind) = OperationKind::from_str(&in_progress.kind) else {
+        return Err(GitError::no_operation());
+    };
+    Ok((kind, in_progress.conflicted))
+}
+
+/// Continue the operation detected server-side. The client never names the
+/// kind, so a stale banner cannot run the wrong command.
+pub async fn operation_continue(root: &str) -> GitResult<()> {
+    let (kind, conflicted) = operation_state(root).await?;
+    if conflicted > 0 {
+        return Err(GitError::conflict(format!(
+            "{conflicted} conflicted file(s) must be resolved and staged first"
+        )));
+    }
+    // The backend has no TTY: never let git spawn an interactive editor for
+    // merge/rebase continuation commits. `true` accepts the prepared message.
+    let output = run_write(
+        git_command(root)
+            .env("GIT_EDITOR", "true")
+            .env("GIT_SEQUENCE_EDITOR", "true")
+            .args([kind.cli_name(), "--continue"]),
+    )
+    .await?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(refine_error(&error_message(&output)))
+}
+
+pub async fn operation_abort(root: &str) -> GitResult<()> {
+    let (kind, _) = operation_state(root).await?;
+    let output = run_write(git_command(root).args([kind.cli_name(), "--abort"])).await?;
     ensure_success(&output)
 }
 
@@ -1823,6 +2213,27 @@ mod tests {
             refine_error("CONFLICT (content): Merge conflict in src/main.rs").code,
             "conflict"
         );
+        assert_eq!(
+            refine_error("error: Your local changes to the following files would be overwritten by merge:\n\ttracked.txt").code,
+            "dirty_worktree"
+        );
+        assert_eq!(
+            refine_error("error: cannot rebase: You have unstaged changes.").code,
+            "dirty_worktree"
+        );
+        assert_eq!(
+            refine_error("error: Committing is not possible because you have unmerged files.").code,
+            "conflict"
+        );
+        assert_eq!(refine_error("error: Resolve your current index first").code, "conflict");
+        assert_eq!(
+            refine_error("fatal: You have not concluded your merge (MERGE_HEAD exists).").code,
+            "operation_in_progress"
+        );
+        assert_eq!(
+            refine_error("fatal: a cherry-pick or revert is in progress").code,
+            "operation_in_progress"
+        );
         assert_eq!(refine_error("fatal: something else").code, "generic");
     }
 
@@ -2230,6 +2641,343 @@ mod tests {
         assert!(result.is_ok(), "apply should retry after the lock disappears: {result:?}");
         assert!(read_index(&root, "tracked.txt").await.contains("CHANGED05"));
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    async fn git_stdout(root: &str, args: &[&str]) -> String {
+        let output =
+            Command::new("git").args(["-C", root]).args(args).output().await.expect("spawn git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// Put the current branch and `other` on conflicting edits of tracked.txt.
+    /// Returns (original branch name, other branch head sha).
+    async fn make_conflicting_branches(dir: &Path, root: &str) -> (String, String) {
+        let base = current_branch_name(root).await;
+        run_git(root, &["checkout", "-q", "-b", "other"]).await;
+        std::fs::write(dir.join("tracked.txt"), "other\n").unwrap();
+        run_git(root, &["add", "."]).await;
+        run_git(root, &["commit", "-q", "-m", "other edit"]).await;
+        let other_sha = head_sha(root).await;
+        run_git(root, &["checkout", "-q", &base]).await;
+        std::fs::write(dir.join("tracked.txt"), "current\n").unwrap();
+        run_git(root, &["add", "."]).await;
+        run_git(root, &["commit", "-q", "-m", "current edit"]).await;
+        (base, other_sha)
+    }
+
+    #[tokio::test]
+    async fn status_reports_merge_conflict_and_abort_clears_it() {
+        if !git_available() {
+            eprintln!("SKIP status_reports_merge_conflict_and_abort_clears_it: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let _ = make_conflicting_branches(&dir, &root).await;
+
+        let err = merge_branch(&root, "other").await.unwrap_err();
+        assert_eq!(err.code, "conflict");
+        let st = status(&root).await.unwrap();
+        let in_progress = st.in_progress.expect("merge state must be reported");
+        assert_eq!(in_progress.kind, "merge");
+        assert_eq!(in_progress.conflicted, 1);
+
+        // Starting another operation while one is paused is refused.
+        let err = merge_branch(&root, "other").await.unwrap_err();
+        assert_eq!(err.code, "operation_in_progress");
+
+        operation_abort(&root).await.unwrap();
+        assert!(status(&root).await.unwrap().in_progress.is_none());
+        assert_eq!(std::fs::read_to_string(dir.join("tracked.txt")).unwrap(), "current\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn merge_continue_requires_resolution_and_creates_merge_commit() {
+        if !git_available() {
+            eprintln!(
+                "SKIP merge_continue_requires_resolution_and_creates_merge_commit: git not found"
+            );
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let _ = make_conflicting_branches(&dir, &root).await;
+        merge_branch(&root, "other").await.unwrap_err();
+
+        let err = operation_continue(&root).await.unwrap_err();
+        assert_eq!(err.code, "conflict", "unresolved entries must block continue");
+
+        std::fs::write(dir.join("tracked.txt"), "resolved\n").unwrap();
+        run_git(&root, &["add", "tracked.txt"]).await;
+        operation_continue(&root).await.unwrap();
+        assert!(status(&root).await.unwrap().in_progress.is_none());
+        assert!(head_subject(&root).await.starts_with("Merge branch"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rebase_conflict_continue_produces_linear_history() {
+        if !git_available() {
+            eprintln!("SKIP rebase_conflict_continue_produces_linear_history: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let (base, _) = make_conflicting_branches(&dir, &root).await;
+        run_git(&root, &["checkout", "-q", "other"]).await;
+
+        let err = rebase_branch(&root, &base).await.unwrap_err();
+        assert_eq!(err.code, "conflict");
+        let st = status(&root).await.unwrap();
+        assert_eq!(st.in_progress.expect("rebase state").kind, "rebase");
+
+        std::fs::write(dir.join("tracked.txt"), "rebased\n").unwrap();
+        run_git(&root, &["add", "tracked.txt"]).await;
+        operation_continue(&root).await.unwrap();
+
+        let st = status(&root).await.unwrap();
+        assert!(st.in_progress.is_none());
+        assert_eq!(st.branch.as_deref(), Some("other"));
+        assert!(
+            git_stdout(&root, &["log", "--merges", "--oneline"]).await.is_empty(),
+            "rebase must not create merge commits"
+        );
+        assert_eq!(std::fs::read_to_string(dir.join("tracked.txt")).unwrap(), "rebased\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rebase_abort_restores_the_branch() {
+        if !git_available() {
+            eprintln!("SKIP rebase_abort_restores_the_branch: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let (base, _) = make_conflicting_branches(&dir, &root).await;
+        run_git(&root, &["checkout", "-q", "other"]).await;
+        let before = head_sha(&root).await;
+
+        rebase_branch(&root, &base).await.unwrap_err();
+        operation_abort(&root).await.unwrap();
+
+        assert_eq!(head_sha(&root).await, before);
+        let st = status(&root).await.unwrap();
+        assert!(st.in_progress.is_none());
+        assert_eq!(st.branch.as_deref(), Some("other"));
+        assert_eq!(std::fs::read_to_string(dir.join("tracked.txt")).unwrap(), "other\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cherry_pick_conflict_reports_in_progress_and_abort_clears_it() {
+        if !git_available() {
+            eprintln!(
+                "SKIP cherry_pick_conflict_reports_in_progress_and_abort_clears_it: git not found"
+            );
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let (_, other_sha) = make_conflicting_branches(&dir, &root).await;
+
+        let err = cherry_pick(&root, &other_sha).await.unwrap_err();
+        assert_eq!(err.code, "conflict");
+        let st = status(&root).await.unwrap();
+        assert_eq!(st.in_progress.expect("cherry-pick state").kind, "cherry_pick");
+
+        operation_abort(&root).await.unwrap();
+        assert!(status(&root).await.unwrap().in_progress.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn operation_continue_and_abort_require_an_operation() {
+        if !git_available() {
+            eprintln!("SKIP operation_continue_and_abort_require_an_operation: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        assert_eq!(operation_continue(&root).await.unwrap_err().code, "no_operation");
+        assert_eq!(operation_abort(&root).await.unwrap_err().code, "no_operation");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn merge_and_rebase_reject_unknown_or_option_like_branches() {
+        if !git_available() {
+            eprintln!(
+                "SKIP merge_and_rebase_reject_unknown_or_option_like_branches: git not found"
+            );
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        assert_eq!(merge_branch(&root, "missing").await.unwrap_err().code, "invalid_branch");
+        assert_eq!(rebase_branch(&root, "--all").await.unwrap_err().code, "invalid_branch");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_distinguishes_am_from_rebase_apply() {
+        if !git_available() {
+            eprintln!("SKIP probe_distinguishes_am_from_rebase_apply: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let state = dir.join(".git").join("rebase-apply");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join("applying"), b"").unwrap();
+        assert_eq!(probe_operation(&root).await, Some(OperationKind::Am));
+
+        std::fs::remove_file(state.join("applying")).unwrap();
+        std::fs::write(state.join("rebasing"), b"").unwrap();
+        assert_eq!(probe_operation(&root).await, Some(OperationKind::Rebase));
+
+        std::fs::remove_dir_all(&state).unwrap();
+        assert_eq!(probe_operation(&root).await, None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_operation_resolves_linked_worktree_git_dir() {
+        if !git_available() {
+            eprintln!("SKIP probe_operation_resolves_linked_worktree_git_dir: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let wt_parent = temp_dir();
+        let wt_path = wt_parent.join("wt");
+        let wt = wt_path.to_str().unwrap().to_string();
+        run_git(&root, &["worktree", "add", "-q", "-b", "wt-branch", &wt]).await;
+
+        assert!(status(&wt).await.unwrap().in_progress.is_none());
+        let git_dir_raw = git_stdout(&wt, &["rev-parse", "--git-dir"]).await;
+        let git_dir = {
+            let path = Path::new(&git_dir_raw);
+            if path.is_absolute() { path.to_path_buf() } else { wt_path.join(path) }
+        };
+        std::fs::write(git_dir.join("MERGE_HEAD"), b"deadbeef\n").unwrap();
+
+        let st = status(&wt).await.unwrap();
+        assert_eq!(st.in_progress.expect("merge state in worktree").kind, "merge");
+        assert!(
+            status(&root).await.unwrap().in_progress.is_none(),
+            "the main worktree must not inherit the linked worktree's state"
+        );
+
+        std::fs::remove_dir_all(&wt_parent).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parse_name_status_z_handles_renames_and_caps() {
+        let raw = "M\0a.txt\0R100\0old.txt\0new.txt\0A\0b.txt\0";
+        let (files, truncated) = parse_name_status_z(raw, 10);
+        assert!(!truncated);
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0].status, "M");
+        assert_eq!(files[1].status, "R");
+        assert_eq!(files[1].orig_path.as_deref(), Some("old.txt"));
+        assert_eq!(files[1].path, "new.txt");
+        assert_eq!(files[2].status, "A");
+
+        let (files, truncated) = parse_name_status_z(raw, 2);
+        assert!(truncated);
+        assert_eq!(files.len(), 2);
+
+        let (files, truncated) = parse_name_status_z(raw, 3);
+        assert!(!truncated);
+        assert_eq!(files.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn range_overview_reports_merge_base_files_and_diff() {
+        if !git_available() {
+            eprintln!("SKIP range_overview_reports_merge_base_files_and_diff: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let initial = head_sha(&root).await;
+        let base_branch = current_branch_name(&root).await;
+        run_git(&root, &["checkout", "-q", "-b", "feature"]).await;
+        std::fs::write(dir.join("feature.txt"), "feature\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "feature commit"]).await;
+        run_git(&root, &["checkout", "-q", &base_branch]).await;
+        run_git(&root, &["mv", "tracked.txt", "renamed.txt"]).await;
+        std::fs::write(dir.join("current.txt"), "current\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "current rename"]).await;
+
+        let range = range_overview(&root, "feature").await.unwrap();
+        assert_eq!(range.merge_base, initial);
+        assert!(!range.files_truncated);
+        let renamed = range.files.iter().find(|f| f.path == "renamed.txt").unwrap();
+        assert_eq!(renamed.status, "R");
+        assert_eq!(renamed.orig_path.as_deref(), Some("tracked.txt"));
+        assert!(range.files.iter().any(|f| f.path == "current.txt" && f.status == "A"));
+        assert!(
+            !range.files.iter().any(|f| f.path == "feature.txt"),
+            "changes on the base side of the fork must not appear"
+        );
+        assert!(range.diff.contains("renamed.txt"));
+        assert!(!range.truncated);
+
+        let empty = range_overview(&root, &base_branch).await.unwrap();
+        assert!(empty.files.is_empty());
+        assert!(empty.diff.is_empty());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn range_file_diff_scopes_to_one_path_and_rejects_escapes() {
+        if !git_available() {
+            eprintln!("SKIP range_file_diff_scopes_to_one_path_and_rejects_escapes: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let base_branch = current_branch_name(&root).await;
+        run_git(&root, &["checkout", "-q", "-b", "feature"]).await;
+        run_git(&root, &["checkout", "-q", &base_branch]).await;
+        std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "b\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "two files"]).await;
+
+        let (diff, truncated) = range_file_diff(&root, "feature", "a.txt").await.unwrap();
+        assert!(!truncated);
+        assert!(diff.contains("a.txt"));
+        assert!(!diff.contains("b.txt"));
+
+        assert_eq!(
+            range_file_diff(&root, "feature", "../outside.txt").await.unwrap_err().code,
+            "invalid_path"
+        );
+        assert_eq!(
+            range_file_diff(&root, "feature", "/etc/passwd").await.unwrap_err().code,
+            "invalid_path"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn range_rejects_unknown_base_and_unrelated_histories() {
+        if !git_available() {
+            eprintln!("SKIP range_rejects_unknown_base_and_unrelated_histories: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        assert_eq!(range_overview(&root, "missing").await.unwrap_err().code, "invalid_base");
+        assert_eq!(range_overview(&root, "--all").await.unwrap_err().code, "invalid_base");
+
+        let base_branch = current_branch_name(&root).await;
+        run_git(&root, &["checkout", "-q", "--orphan", "orphan"]).await;
+        run_git(&root, &["commit", "-q", "-m", "orphan root"]).await;
+        run_git(&root, &["checkout", "-q", &base_branch]).await;
+        assert_eq!(range_overview(&root, "orphan").await.unwrap_err().code, "no_merge_base");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

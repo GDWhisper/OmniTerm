@@ -13,6 +13,8 @@ import { IconEdit, IconX } from '../FileManager/icons'
 export type GitDrawerTarget =
   | { kind: 'file'; path: string; staged: boolean; untracked: boolean }
   | { kind: 'commit'; sha: string }
+  /** Read-only single-file diff within a BASE...HEAD comparison. */
+  | { kind: 'range'; base: string; path: string }
 
 const DEFAULT_CONTEXT_LINES = 3
 const EXPANDED_CONTEXT_LINES = 10
@@ -99,13 +101,21 @@ export function GitDrawer({
             setHunkContextLines(data.context_lines)
           }
           setCommit(null)
-        } else {
+        } else if (target.kind === 'commit') {
           const data = await api.gitShow(bind, target.sha)
           if (cancelled) return
           setCommit(data)
           setDiff(data.diff)
           setTruncated(data.truncated)
           setRepoRoot(null)
+          setHunks([])
+        } else {
+          const data = await api.gitRangeDiff(bind, target.base, target.path)
+          if (cancelled) return
+          setCommit(null)
+          setDiff(data.diff)
+          setTruncated(data.truncated)
+          setRepoRoot(data.root)
           setHunks([])
         }
       } catch (err: unknown) {
@@ -145,13 +155,13 @@ export function GitDrawer({
   }
 
   const expandable = target.kind === 'file' && !target.untracked && !truncated
-  const title = target.kind === 'file'
-    ? target.path.split('/').pop() || target.path
-    : commit?.short_sha || target.sha.slice(0, 7)
+  const title = target.kind === 'commit'
+    ? (commit?.short_sha || target.sha.slice(0, 7))
+    : (target.path.split('/').pop() || target.path)
 
   return (
     <>
-      <DrawerShell height={height} onHeightChange={onHeightChange} onHeightCommit={onHeightCommit} title={target.kind === 'file' ? 'diff' : 'commit'}>
+      <DrawerShell height={height} onHeightChange={onHeightChange} onHeightCommit={onHeightCommit} title={target.kind === 'commit' ? 'commit' : 'diff'}>
         {/* Header row */}
         <div
           style={{
@@ -175,12 +185,17 @@ export function GitDrawer({
               minWidth: 0,
               flex: 1,
             }}
-            title={target.kind === 'file' ? target.path : target.sha}
+            title={target.kind === 'commit' ? target.sha : target.path}
           >
             {title}
             {target.kind === 'file' && (
               <span style={{ color: 'var(--text-faint)', fontSize: 11, marginLeft: 8 }}>
                 {target.staged ? t('git.stagedLabel') : t('git.unstagedLabel')}
+              </span>
+            )}
+            {target.kind === 'range' && (
+              <span style={{ color: 'var(--text-faint)', fontSize: 11, marginLeft: 8 }}>
+                {t('git.rangeLabel', { base: target.base })}
               </span>
             )}
           </span>
@@ -195,7 +210,7 @@ export function GitDrawer({
               {contextLines === DEFAULT_CONTEXT_LINES ? '+ctx' : '−ctx'}
             </button>
           )}
-          {target.kind === 'file' && repoRoot && (
+          {target.kind !== 'commit' && repoRoot && (
             <button
               onClick={() => onOpenInEditor(`${repoRoot}/${target.path}`, repoRoot)}
               style={{
