@@ -933,16 +933,10 @@ body.fm-dragging * {
   padding-left: 26px;
 }
 
-/* ── Table rows ── */
-.fm-row {
-  transition: background 0.15s ease;
-}
-
-.fm-row:hover {
-  background: var(--accent-10);
-}
-
-.fm-table tr:hover td {
+/* ── Table rows ──
+   行高 = 24px 动作图标（preflight 已清掉 td 默认 padding）；虚拟滚动常量
+   FM_ROW_HEIGHT（fileListWindow.ts）与此同步，改任一处须同步另一处。 */
+.fm-table tr:not(.fm-spacer-row):hover td {
   background: var(--accent-10);
 }
 
@@ -950,12 +944,11 @@ body.fm-dragging * {
   background: var(--accent-14) !important;
 }
 
-.fm-row td {
-  white-space: nowrap;
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--bg-elevated);
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* 虚拟滚动 spacer 行：只负责撑起未渲染区间的高度，不参与边框/内边距 */
+.fm-table tr.fm-spacer-row td {
+  padding: 0;
+  border: 0;
+  line-height: 0;
 }
 
 /* Actions cell — flex centers the row action icons (copy / edit / rename / delete; edit 与超阈值退让图标按行二选一) */

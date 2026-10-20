@@ -48,6 +48,8 @@ interface UseFileDragOptions {
   fmSource: FmSource | null
   activeProjectId: string | null
   onMoveComplete: () => void
+  /** 真实滚动容器（.fm-table-scroll）；缺省回退 tableWrapRef。 */
+  scrollRef?: React.RefObject<HTMLDivElement | null>
 }
 
 export function useFileDrag(opts: UseFileDragOptions) {
@@ -87,7 +89,8 @@ export function useFileDrag(opts: UseFileDragOptions) {
   }, [])
 
   const autoScroll = useCallback((y: number) => {
-    const container = tableWrapRef.current
+    // 真实滚动元素是内层 .fm-table-scroll；tableWrapRef 只用于宽度测量
+    const container = optsRef.current.scrollRef?.current ?? tableWrapRef.current
     if (!container) return
     const rect = container.getBoundingClientRect()
     const EDGE = 40

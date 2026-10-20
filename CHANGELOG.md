@@ -58,6 +58,7 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-10-20 10:11) `[frontend]` `[backend]` `[api]` 文件管理器大目录加载优化：目录列表不再为每个子目录额外 `read_dir` 预统计条目数（目录 Size 列显示 `-`，接口 `size` 对目录为 `null`），普通条目元数据从两次 stat 合并为一次；文件表格超过 200 行启用虚拟滚动，只渲染可视区 + overscan（`src/fs/mod.rs`、`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/FileManager/fileListWindow.ts`、`frontend/src/components/FileManager/useFileDrag.ts`）
 - (2026-10-20 02:10) `[backend]` 版本探测支持可选 GitHub token：每次请求现读 `GH_TOKEN`/`GITHUB_TOKEN`（优先级同 `gh`，不落盘），有效时以 Bearer 认证把 API 额度提升到 5000 次/时；token 缺失/失效/额度耗尽继续按渠道降级。两个变量加入 `startup_leak_env_vars`，不再继承进 tmux/pty/ACP agent 及 update 子进程（`src/update.rs`、`src/engine/pty_io.rs`、`src/acp/agent_proc.rs`）
 
 ### Fixed

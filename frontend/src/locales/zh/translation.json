@@ -411,7 +411,6 @@
   "fm.copyPath": "复制绝对路径",
   "fm.copyPathSuccess": "已复制路径",
   "fm.copyPathFailed": "复制路径失败",
-  "fm.items": "项",
   "fm.backToTerminalDir": "回到终端目录",
   "fm.openTerminalHere": "在此打开终端",
   "fm.terminalOpened": "已在此目录打开终端",

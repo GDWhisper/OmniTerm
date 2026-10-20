@@ -314,6 +314,37 @@
 
 ---
 
+## 大列表虚拟滚动 (virtualized-table convention)
+
+**适用场景**：条目数可能上千的表格/列表。阈值以下全量渲染；超过阈值只渲染
+可视区 + overscan，上下用 spacer 行撑住原生滚动高度。
+
+**契约**（实现见 `frontend/src/components/FileManager/fileListWindow.ts` +
+`FileManager.tsx`）：
+- **窗口计算是纯函数**：`computeFileListWindow(count, scrollTop, viewportHeight)`
+  返回 `start/end/topPad/bottomPad`。不变式
+  `topPad + (end-start)×rowHeight + bottomPad === count×rowHeight`，须有单测
+  （含滚动到底、越界、视口未测出三态）。
+- **行高固定且单一真源**：`FM_ROW_HEIGHT` 与 CSS 实际行高同步（当前 24px，
+  由动作图标高度决定）。虚拟化列表内不要放会改变行高的内容；spacer 行设
+  `padding:0; border:0; line-height:0`，hover 样式须排除 spacer。
+- **阈值以下保持全量 DOM**：行内编辑、拖拽、既有测试断言都按全量行工作；
+  不为小目录引入窗口化，避免无收益的行为变化。
+- **选择/拖拽/全选基于完整数据数组**，不是渲染切片；窗口只影响 DOM。
+- **滚动容器必须是真实滚动元素**：FileManager 是内层 `.fm-table-scroll`
+  （外层 `.fm-table-wrap` 仅 `overflow:hidden`）；窗口测量、scroll 监听与
+  拖拽 autoScroll 都绑它，勿绑外层。
+- **目录导航回顶**；SSE 刷新同一目录不重置滚动位置。
+
+**已有案例**：FileManager 文件表格（2026-10-20，阈值 200 行）。
+
+**收益**：DOM 行数从 O(条目数) 降为 O(可视行数)，原生滚动条与 sticky 表头/
+操作列行为不变。
+**代价**：行高成为契约；滚动/选择/拖拽耦合点需回归（尤其 auto-scroll 与
+行内编辑跨窗口卸载）。
+
+---
+
 ## Sidebar 底部按钮弹出面板 (sidebar-popup convention)
 
 **适用场景**：Sidebar 底部状态栏新增按钮 → 点击弹出 fixed 面板。

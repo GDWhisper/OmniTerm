@@ -411,7 +411,6 @@
   "fm.copyPath": "Copy absolute path",
   "fm.copyPathSuccess": "Path copied",
   "fm.copyPathFailed": "Failed to copy path",
-  "fm.items": "items",
   "fm.backToTerminalDir": "Go to terminal directory",
   "fm.openTerminalHere": "Open terminal here",
   "fm.terminalOpened": "Terminal opened in this directory",

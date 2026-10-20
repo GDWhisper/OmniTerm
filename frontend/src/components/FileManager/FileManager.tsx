@@ -1,6 +1,6 @@
 import { getParentPath, joinPath, findCoveringProject, findExactProject } from '../../utils/path'
 import { getInitialDrawerHeight } from '../../utils/drawer'
-import { useState, useEffect, useRef, useCallback, useMemo, type KeyboardEvent, type DragEvent } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, type KeyboardEvent, type DragEvent, type UIEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type Session } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
@@ -20,6 +20,7 @@ import { FM_COL, FM_COL_CHECKBOX, fitFileTableColumns, type FileTableColWidths }
 import { triggerBump } from '../../utils/pixelAnimations'
 import { FolderSprite, FileSprite, FileCodeSprite } from '../PixelUI/PixelSprites'
 import { useFileDrag } from './useFileDrag'
+import { computeFileListWindow, FM_ROW_HEIGHT } from './fileListWindow'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
 
@@ -133,6 +134,12 @@ export function FileManager() {
 
   const [files, setFiles] = useState<FileEntry[]>([])
   const [cwd, setCwd] = useState('')  // absolute path from server
+  // 虚拟滚动窗口状态：真实滚动元素是内层 .fm-table-scroll（外层 wrap 不滚动）
+  const fileListScrollRef = useRef<HTMLDivElement | null>(null)
+  const [fileListScrollTop, setFileListScrollTop] = useState(0)
+  const [fileListViewportH, setFileListViewportH] = useState(() =>
+    typeof window === 'undefined' ? 0 : window.innerHeight,
+  )
   const [isOutsideWorkspace, setIsOutsideWorkspace] = useState(false)
   // workspace 边界根路径（listFiles2 返回的 workspace_root）；project 模式为 undefined
   const [workspaceRoot, setWorkspaceRoot] = useState<string | undefined>(undefined)
@@ -365,6 +372,7 @@ export function FileManager() {
   } = useFileDrag({
     cwd, selected, fmSource, activeProjectId,
     onMoveComplete: () => fetchFiles(),
+    scrollRef: fileListScrollRef,
   })
 
   // 列宽随容器自适应（name/mtime/size 三列统一分配，算式见 fileTableLayout.ts）；
@@ -403,6 +411,32 @@ export function FileManager() {
       }
     }
   }, [fileChangeEvent, activeSessionId])
+
+  // 虚拟滚动：测量真实滚动容器高度（面板隐藏/恢复时 ResizeObserver 也会补测）
+  const hasFiles = files.length > 0
+  useEffect(() => {
+    const el = fileListScrollRef.current
+    if (!el) return
+    const measure = () => setFileListViewportH(el.clientHeight)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [hasFiles])
+
+  // 目录导航回到顶部；SSE 刷新同一目录不重置
+  useEffect(() => {
+    setFileListScrollTop(0)
+    if (fileListScrollRef.current) fileListScrollRef.current.scrollTop = 0
+  }, [cwd])
+
+  const handleFileListScroll = (e: UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget
+    setFileListViewportH(el.clientHeight)
+    // 量化到行边界：逐像素滚动不触发重渲染，跨行才更新窗口
+    const next = Math.floor(el.scrollTop / FM_ROW_HEIGHT) * FM_ROW_HEIGHT
+    setFileListScrollTop((prev) => (prev === next ? prev : next))
+  }
 
   // 拖拽松手才落盘：逐帧写 sessionStorage 会在一次拖拽里写上百次
   const commitDrawerHeight = useCallback((h: number) => {
@@ -943,6 +977,16 @@ export function FileManager() {
     }
   })
 
+  // 大列表窗口化：阈值以下 start/end 覆盖全量，行为与虚拟滚动前一致
+  const fileWindow = useMemo(
+    () => computeFileListWindow(files.length, fileListScrollTop, fileListViewportH),
+    [files.length, fileListScrollTop, fileListViewportH],
+  )
+  const visibleFiles = fileWindow.start === 0 && fileWindow.end === files.length
+    ? files
+    : files.slice(fileWindow.start, fileWindow.end)
+  const fileColumnCount = downloadMode ? 5 : 4
+
   return (
     <div
       className="omnifm-root"
@@ -1134,7 +1178,12 @@ export function FileManager() {
             <span className="fm-empty-hint">{t('fm.dragHint')}</span>
           </div>
         ) : (
-          <div className="fm-table-scroll" style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto' }}>
+          <div
+            ref={fileListScrollRef}
+            className="fm-table-scroll"
+            style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto' }}
+            onScroll={handleFileListScroll}
+          >
             {/* 自适应模式给 table 显式宽度，让 table-layout: fixed 真正生效
                 （列宽由 JS 精确分配、总宽=容器宽，窄面板下按优先级压缩而非
                 溢出被 sticky 遮挡，X17）；手动态保持无宽度的 auto 布局，
@@ -1187,7 +1236,12 @@ export function FileManager() {
                 </tr>
               </thead>
               <tbody>
-                {files.map((f) => {
+                {fileWindow.topPad > 0 && (
+                  <tr className="fm-spacer-row" aria-hidden="true">
+                    <td colSpan={fileColumnCount} style={{ height: fileWindow.topPad }} />
+                  </tr>
+                )}
+                {visibleFiles.map((f) => {
                   const fullPath = joinPath(cwd, f.name)
                   const isDir = isDirEntry(f.path_type)
                   const isEditing = editingName === fullPath
@@ -1237,7 +1291,7 @@ export function FileManager() {
                       </td>
                       {/* 容器 direction:rtl 只为左侧省略号；bdi 隔离避免日期中的 - : 被 bidi 重排 */}
                       <td className="fm-td-time" title={formatTime(f.mtime)}><bdi dir="ltr">{formatTime(f.mtime)}</bdi></td>
-                      <td className="fm-td-size" title={isDir ? `${f.size} ${t('fm.items')}` : formatSize(f.size)}>{isDir ? `${f.size} ${t('fm.items')}` : formatSize(f.size)}</td>
+                      <td className="fm-td-size" title={isDir ? undefined : formatSize(f.size)}>{isDir ? '-' : formatSize(f.size)}</td>
                       <td className="fm-td-actions-cell">
                         <span
                           className="fm-act-icon"
@@ -1290,6 +1344,11 @@ export function FileManager() {
                     </tr>
                   )
                 })}
+                {fileWindow.bottomPad > 0 && (
+                  <tr className="fm-spacer-row" aria-hidden="true">
+                    <td colSpan={fileColumnCount} style={{ height: fileWindow.bottomPad }} />
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

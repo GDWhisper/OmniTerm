@@ -9,7 +9,8 @@
 //! - `PathType` / `FileEntry` field names and JSON shape (mirrors dufs's
 //!   `PathType` / `PathItem`).
 //! - mtime resolution with fallback to created time.
-//! - Directory `size` = child entry count, capped by `MAX_SUBPATHS_COUNT`.
+//! - Directory `size` is `None`; only regular files report byte length. Counting
+//!   child entries eagerly costs one full `read_dir` per subdirectory.
 //! - Sort order: directories first, then by chosen key.
 //! - Path normalization to forward slashes.
 //!
@@ -24,8 +25,6 @@ use std::time::SystemTime;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
-
-const MAX_SUBPATHS_COUNT: u64 = 1000;
 
 /// 文本探测窗口大小：读取文件头部此字节数判定是否为 UTF-8 文本。
 /// 非文本（二进制）文件在窗口内即命中非法序列，可避免把大型二进制文件整体读入内存。
@@ -240,7 +239,8 @@ pub struct FileEntry {
     pub path_type: PathType,
     pub name: String,
     pub mtime: u64,
-    pub size: u64,
+    /// 文件字节数；目录为 `None`（不预统计条目数——那需要为每个子目录额外 read_dir）。
+    pub size: Option<u64>,
     /// 相对搜索根的路径（仅 [`search_files`] 填充；目录列表为 None 不序列化）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rel_path: Option<String>,
@@ -308,13 +308,24 @@ pub async fn list_dir(
 
         // 单条目 metadata 失败（如 Windows 用户目录下 ACL 拒绝访问的遗留
         // junction「Application Data」等）只跳过该条目，不让整个列表失败
-        let Ok(meta) = fs::metadata(entry.path()).await else {
+        let Ok(file_type) = entry.file_type().await else {
             continue;
         };
-        let Ok(meta2) = fs::symlink_metadata(entry.path()).await else {
+        // 不跟随 symlink（Unix 上等价 symlink_metadata，Windows 上无需额外系统调用）。
+        // 普通条目仅此一次 stat，替代旧实现的「follow + lstat」两次。
+        let Ok(link_meta) = entry.metadata().await else {
             continue;
         };
-        let is_symlink = meta2.is_symlink();
+        let is_symlink = file_type.is_symlink();
+        // 维持旧行为：symlink 取目标元数据；断链条目整体跳过。
+        let meta = if is_symlink {
+            match fs::metadata(entry.path()).await {
+                Ok(m) => m,
+                Err(_) => continue,
+            }
+        } else {
+            link_meta
+        };
         let is_dir = meta.is_dir();
 
         let path_type = match (is_symlink, is_dir) {
@@ -332,26 +343,14 @@ pub async fn list_dir(
             .map(|t| to_timestamp(&t))
             .unwrap_or(0);
 
-        // For directories, count entries (capped by MAX_SUBPATHS_COUNT)
-        let size = if is_dir {
-            let mut count: u64 = 0;
-            if let Ok(mut sub) = fs::read_dir(entry.path()).await {
-                while let Ok(Some(_sub_entry)) = sub.next_entry().await {
-                    count += 1;
-                    if count >= MAX_SUBPATHS_COUNT {
-                        break;
-                    }
-                }
-            }
-            count
-        } else {
-            meta.len()
-        };
+        let size = if is_dir { None } else { Some(meta.len()) };
 
         entries.push(FileEntry { path_type, name, mtime, size, rel_path: None });
     }
 
-    // Sort: directories first, then by chosen key
+    // Sort: directories first, then by chosen key. Name is the tiebreaker so
+    // equal keys (notably every directory under Size, since size is None) keep
+    // a deterministic order instead of filesystem readdir order.
     entries.sort_by(|a, b| {
         let dir_cmp = b.is_dir().cmp(&a.is_dir());
         if dir_cmp != std::cmp::Ordering::Equal {
@@ -362,7 +361,11 @@ pub async fn list_dir(
             SortKey::Mtime => a.mtime.cmp(&b.mtime),
             SortKey::Size => a.size.cmp(&b.size),
         };
-        if desc { key_cmp.reverse() } else { key_cmp }
+        let key_cmp = if desc { key_cmp.reverse() } else { key_cmp };
+        if key_cmp != std::cmp::Ordering::Equal {
+            return key_cmp;
+        }
+        a.name.to_lowercase().cmp(&b.name.to_lowercase())
     });
 
     Ok(entries)
@@ -792,7 +795,7 @@ fn search_recursive<'a>(
                     path_type,
                     name,
                     mtime,
-                    size: if is_dir { 0 } else { meta.len() },
+                    size: if is_dir { None } else { Some(meta.len()) },
                     rel_path: Some(rel.clone()),
                 });
             }
@@ -875,6 +878,76 @@ mod tests {
         // allow_escape：允许创建 base 之外的路径
         let target = sanitize_path_new_allow_escape(&base, "../outside/newfile").unwrap();
         assert_eq!(target, outside.join("newfile"));
+    }
+
+    fn list_fixture(tag: &str) -> std::path::PathBuf {
+        let base = std::env::temp_dir().join(format!(
+            "omniterm_fs_list_{tag}_{}_{}",
+            std::process::id(),
+            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    #[tokio::test]
+    async fn test_list_dir_files_report_bytes_and_dirs_do_not_count_children() {
+        let base = list_fixture("sizes");
+        fs::create_dir_all(base.join("sub")).unwrap();
+        fs::write(base.join("sub").join("nested.txt"), b"ignored").unwrap();
+        fs::write(base.join("a.txt"), b"hello").unwrap();
+
+        let entries = list_dir(&base, "", SortKey::Name, false).await.unwrap();
+        let sub = entries.iter().find(|e| e.name == "sub").unwrap();
+        assert_eq!(sub.path_type, PathType::Dir);
+        assert_eq!(sub.size, None, "directory size must not eagerly count children");
+
+        let file = entries.iter().find(|e| e.name == "a.txt").unwrap();
+        assert_eq!(file.path_type, PathType::File);
+        assert_eq!(file.size, Some(5));
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn test_list_dir_size_sort_breaks_ties_by_name() {
+        let base = list_fixture("size_ties");
+        for name in ["b-dir", "a-dir"] {
+            fs::create_dir_all(base.join(name)).unwrap();
+        }
+
+        let entries = list_dir(&base, "", SortKey::Size, false).await.unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["a-dir", "b-dir"]);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_list_dir_symlink_target_metadata_and_broken_link_skip() {
+        use std::os::unix::fs::symlink;
+
+        let base = list_fixture("symlinks");
+        fs::create_dir_all(base.join("dir")).unwrap();
+        fs::write(base.join("file.txt"), b"abc").unwrap();
+        symlink(base.join("dir"), base.join("link-dir")).unwrap();
+        symlink(base.join("file.txt"), base.join("link-file")).unwrap();
+        symlink(base.join("missing"), base.join("broken")).unwrap();
+
+        let entries = list_dir(&base, "", SortKey::Name, false).await.unwrap();
+        assert!(!entries.iter().any(|e| e.name == "broken"), "broken symlink is skipped");
+
+        let link_dir = entries.iter().find(|e| e.name == "link-dir").unwrap();
+        assert_eq!(link_dir.path_type, PathType::SymlinkDir);
+        assert_eq!(link_dir.size, None);
+
+        let link_file = entries.iter().find(|e| e.name == "link-file").unwrap();
+        assert_eq!(link_file.path_type, PathType::SymlinkFile);
+        assert_eq!(link_file.size, Some(3));
+
+        let _ = fs::remove_dir_all(&base);
     }
 
     /// 构造 write_file_stream 夹具：返回 (base, dir 内项数快照)。
