@@ -1,28 +1,29 @@
-# OmniTerm v0.3.3 更新摘要
+# OmniTerm v0.3.4 更新摘要
 
 > 本版本亮点由发布 agent 基于 CHANGELOG 手动总结。详细条目见 CHANGELOG.md。
 
 ## 新功能
 
-- GIT 面板能力补齐：分支重命名 / 删除（可同时删除上游远程分支）、STASH 面板（列表、带备注暂存、Apply / Pop / Drop）、HISTORY 提交右键菜单（复制 SHA、cherry-pick、revert、soft/mixed reset），提交框新增 AMEND 与「提交并推送」。
-- AI 生成提交信息：设置页可选 OpenAI 兼容或 Anthropic 接口并拉取模型列表，API key 保存在本地受限文件或用 `$ENV_VAR` 引用服务端环境变量；提交框 GENERATE 只发送 staged diff，已有文字时可选择替换或追加。
-- ACP 会话浏览位置记忆：切走会话再回来会回到离开前正在读的位置（上翻浏览中），回到底部、发送或重新生成后不再恢复。
+- GIT 面板支持 hunk 级暂存 / 取消暂存 / 回滚：diff 抽屉内按块操作，应用前与当前 diff 逐字比对，内容已变化时提示并自动刷新；diff 上下文可在 U3 / U10 间切换。
+- GIT 面板支持分支对比与 merge/rebase：BASE 选择器查看 `base...HEAD` 文件列表与只读 diff；分支行内可直接合并或变基，冲突时面板常驻中断态横幅提供 CONTINUE / ABORT。
+- GIT 提交详情展示变更文件（状态字母、重命名原路径、截断提示）；HISTORY 支持按单个文件或全分支过滤。
+- 文件管理器大目录体验优化：大列表启用虚拟滚动，目录列表默认最多返回 5000 条并显示「前 N / 共 M 项」与「加载全部」；搜索改为按需 stat，结果确定性排序并明示截断（2 万文件树罕见查询实测约 0.8s → 0.05s）。
 
 ## 重要修复
 
-- 修复 ACP 后台任务（Workflow / 后台 Bash）运行期间被空闲回收：现在跟踪任务生命周期，任务未结束不再按 idle 阈值关闭 agent；同时修复手动恢复会话重放被断线打断后不自动续传、恢复期发送 prompt 产生空消息。
-- 修复 GitHub API 匿名配额耗尽导致正式版静默收不到更新提醒：主源失败时按安装渠道降级到无配额限制的版本源，npm 一键升级同样可降级继续。
-- 修复 ACP 会话切换后的滚动位置错乱（贴底态不复位、加载更早历史时的陈旧锚点串台）。
+- 修复文件搜索结果路径错误：同名嵌套文件此前可能指向根目录同名文件，现统一使用后端相对路径并在结果行显示所在目录。
+- 修复 GIT 面板快速连点写操作时第二个操作未执行却提示成功。
+- 修复长期打开的标签页收不到新版本提醒：改为每 10 分钟轮询，并在页面恢复可见 / 网络恢复时补查。
 
 ## 工程改进
 
-- ACP system 告知改为嵌流信息面板（细分隔线 + ※ 标记、两主题均过 AA 的文字色），详情预览使用统一滚动容器。
-- ACP 思考块完成态标题统一为「深度思考」，不再显示块内耗时。
-- 权限请求超时设为「自动推进 + 总是」时不再发送决策通知（无接收人）。
+- 版本探测支持可选 GitHub token（`GH_TOKEN` / `GITHUB_TOKEN`，有效时 API 额度提升至 5000 次/时），缺失或失效时继续按渠道降级；两个变量不再继承进终端 / agent / update 子进程。
+- 文件管理器目录元数据读取合并为一次 stat，不再为每个子目录预统计条目数，降低大目录加载开销。
+- **BREAKING**（API）：项目兜底 `GET /files?workspace=` 返回从裸数组改为 `{files,total,truncated}`（当前前端未使用该路径）。
 
 ## 安装与升级
 
 - 新用户：使用 `install.sh`（Linux / macOS）或 `install.ps1`（Windows）一键安装
 - 升级：`cargo install omniterm` 或从 Releases 下载对应平台 binary 覆盖
 
-**Full Changelog**: https://github.com/GDWhisper/OmniTerm/compare/v0.3.2...v0.3.3
+**Full Changelog**: https://github.com/GDWhisper/OmniTerm/compare/v0.3.3...v0.3.4
