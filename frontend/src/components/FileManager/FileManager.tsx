@@ -21,6 +21,7 @@ import { triggerBump } from '../../utils/pixelAnimations'
 import { FolderSprite, FileSprite, FileCodeSprite } from '../PixelUI/PixelSprites'
 import { useFileDrag } from './useFileDrag'
 import { computeFileListWindow, FM_ROW_HEIGHT } from './fileListWindow'
+import { sortFileEntries } from './fileListSort'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
 
@@ -29,6 +30,8 @@ interface FileEntry {
   name: string
   mtime: number
   size: number | null
+  /** 相对搜索根的路径，仅搜索结果返回 */
+  rel_path?: string
 }
 
 type SortKey = 'name' | 'mtime' | 'size'
@@ -61,7 +64,7 @@ function formatTime(ms: number): string {
 function filesEqual(a: FileEntry[], b: FileEntry[]): boolean {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) {
-    if (a[i].name !== b[i].name || a[i].mtime !== b[i].mtime || a[i].size !== b[i].size || a[i].path_type !== b[i].path_type) return false
+    if (a[i].name !== b[i].name || a[i].mtime !== b[i].mtime || a[i].size !== b[i].size || a[i].path_type !== b[i].path_type || a[i].rel_path !== b[i].rel_path) return false
   }
   return true
 }
@@ -164,6 +167,11 @@ export function FileManager() {
   const [editValue, setEditValue] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
+  // 已生效的搜索（结果横幅/本地排序/SSE 抑制都以此为准）；输入框内容可与之不同
+  const [activeSearchQuery, setActiveSearchQuery] = useState('')
+  const [searchTruncated, setSearchTruncated] = useState(false)
+  const activeSearchQueryRef = useRef('')
+  activeSearchQueryRef.current = activeSearchQuery
   const searchRef = useRef<HTMLInputElement>(null)
   const searchWrapRef = useRef<HTMLDivElement>(null)
   // Download mode: button toggles a selection mode; checkboxes are inactive until activated
@@ -197,6 +205,9 @@ export function FileManager() {
   }, [activeSessionId, activeWorkspaceId])
   const sourceKey = useMemo(() => fmSource ? `${fmSource.type}:${fmSource.id}` : null, [fmSource])
 
+  // 搜索结果的 rel_path 相对 cwd；目录列表没有 rel_path，直接用 name
+  const entryPath = (entry: FileEntry) => joinPath(cwd, entry.rel_path ?? entry.name)
+
   const fetchFiles = useCallback(async (path?: string, sort?: string, desc?: boolean, silent = false, all?: boolean): Promise<string | undefined> => {
     if (!fmSource) {
       setFiles([])
@@ -208,6 +219,11 @@ export function FileManager() {
       setLoading(true)
       // 非静默刷新会卸载再重挂表格；滚动容器回到 0，窗口状态必须同步归零
       setFileListScrollTop(0)
+      // 目录列表重新加载 = 退出搜索态（导航/刷新/写操作后都走这里）
+      setActiveSearchQuery('')
+      setSearchTruncated(false)
+      setSearchOpen(false)
+      setSearchQuery('')
     }
     try {
       // Workspace mode has no session-keyed manualPath: fall back to current
@@ -420,7 +436,8 @@ export function FileManager() {
   // SSE-driven refresh: debounce 防抖，把窗口内多次事件收敛为一次全量刷新
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    if (!fileChangeEvent || !activeSessionId) return
+    // 搜索结果是一份快照；SSE 事件不应把它悄悄替换成目录列表
+    if (!fileChangeEvent || !activeSessionId || activeSearchQueryRef.current) return
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
     refreshTimerRef.current = setTimeout(() => {
       refreshTimerRef.current = null
@@ -572,13 +589,13 @@ export function FileManager() {
   const handleRowClick = (entry: FileEntry, e?: React.MouseEvent) => {
     if (suppressClick.current) return
     if (editingName) return
-    const fullPath = joinPath(cwd, entry.name)
+    const fullPath = entryPath(entry)
     const idx = files.indexOf(entry)
 
     if (e?.shiftKey && selectAnchor.current >= 0) {
       const start = Math.min(selectAnchor.current, idx)
       const end = Math.max(selectAnchor.current, idx)
-      const range = files.slice(start, end + 1).map((f) => joinPath(cwd, f.name))
+      const range = files.slice(start, end + 1).map((f) => entryPath(f))
       setSelected(new Set(range))
       return
     }
@@ -615,6 +632,11 @@ export function FileManager() {
     }
     setSortKey(key)
     setSortDesc(newDesc)
+    if (activeSearchQuery) {
+      // 搜索结果最多 100 条，本地排序；不要为了排序把结果替换成目录列表
+      setFiles((prev) => sortFileEntries(prev, key, newDesc))
+      return
+    }
     fetchFiles(undefined, key, newDesc)
   }
 
@@ -669,6 +691,8 @@ export function FileManager() {
     setCreateName('')
     setSearchOpen(false)
     setSearchQuery('')
+    setActiveSearchQuery('')
+    setSearchTruncated(false)
   }, [sourceKey])
 
   const toggleSearch = () => {
@@ -677,6 +701,8 @@ export function FileManager() {
       setSearchQuery('')
     } else {
       setSearchOpen(true)
+      // 重新打开时带回当前生效的查询，避免用户只看到结果却想不起搜了什么
+      setSearchQuery(activeSearchQuery)
       setTimeout(() => searchRef.current?.focus(), 0)
     }
   }
@@ -692,6 +718,7 @@ export function FileManager() {
     if (tag === 'INPUT' || tag === 'TEXTAREA') return
     if (e.key === 'Escape') {
       if (searchOpen) { setSearchOpen(false); setSearchQuery(''); return }
+      if (activeSearchQuery) { clearSearch(); return }
       if (createOpen) { closeCreate(); return }
       if (downloadMode) { exitDownloadMode(); return }
     } else if (e.key === 'Delete') {
@@ -707,7 +734,7 @@ export function FileManager() {
       }
     } else if (e.key === 'a' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault()
-      setSelected(new Set(files.map((f) => joinPath(cwd, f.name))))
+      setSelected(new Set(files.map((f) => entryPath(f))))
     }
   }
 
@@ -855,18 +882,29 @@ export function FileManager() {
     input.click()
   }
 
-  const handleSearch = async () => {
-    if (!searchQuery.trim() || !fmSource) { fetchFiles(); return }
+  const clearSearch = () => {
+    setSearchOpen(false)
+    setSearchQuery('')
+    setActiveSearchQuery('')
+    setSearchTruncated(false)
+    fetchFiles()
+  }
+
+  const runSearch = async (query: string) => {
+    if (!fmSource) return
     setLoading(true)
     try {
-      const results = await api.searchFiles2({
+      const data = await api.searchFiles2({
         session: fmSource.type === 'session' ? fmSource.id : undefined,
         workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
         projectId: activeProjectId ?? undefined,
-        query: searchQuery,
+        query,
         path: cwd,
       })
-      setFiles(results)
+      const results = data.files ?? []
+      setFiles(sortFileEntries(results, sortKeyRef.current, sortDescRef.current))
+      setActiveSearchQuery(query)
+      setSearchTruncated(data.truncated ?? false)
       setFileListTruncated(false)
       setFileListTotal(results.length)
     } catch (err: unknown) {
@@ -874,6 +912,15 @@ export function FileManager() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleSearch = () => {
+    const query = searchQuery.trim()
+    if (!query) {
+      clearSearch()
+      return
+    }
+    void runSearch(query)
   }
 
   // 用户显式要求完整列表：绕过后端 MAX_LIST_ENTRIES，后续刷新保持该选择
@@ -909,8 +956,10 @@ export function FileManager() {
           document.body.removeChild(a)
         })
         if (filePaths.length === 1) {
-          const name = filePaths[0].split('/').pop() || ''
-          const entry = files.find((f) => f.name === name)
+          const filePath = filePaths[0]
+          const name = filePath.split('/').pop() || ''
+          // 搜索结果可能有同名文件，按完整路径匹配而不是仅按 name
+          const entry = files.find((f) => entryPath(f) === filePath)
           const isDir = entry && (entry.path_type === 'Dir' || entry.path_type === 'SymlinkDir')
           addToast('success', isDir
             ? t('fm.downloadStartedDir', { name })
@@ -944,7 +993,7 @@ export function FileManager() {
     if (checked.size === files.length) {
       setChecked(new Set())
     } else {
-      setChecked(new Set(files.map((f) => joinPath(cwd, f.name))))
+      setChecked(new Set(files.map((f) => entryPath(f))))
     }
   }
 
@@ -1155,7 +1204,14 @@ export function FileManager() {
           </div>
 
           {/* 7. Refresh (moved to the end) */}
-          <button className="fm-btn" onClick={() => fetchFiles()} title={t('fm.refresh')}>
+          <button
+            className="fm-btn"
+            onClick={() => {
+              if (activeSearchQuery) void runSearch(activeSearchQuery)
+              else fetchFiles()
+            }}
+            title={t('fm.refresh')}
+          >
             <IconRefresh />
           </button>
         </div>
@@ -1206,6 +1262,17 @@ export function FileManager() {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        {!loading && activeSearchQuery && (
+          <div className="fm-search-results-bar">
+            <span>
+              {t('fm.searchResults', { query: activeSearchQuery, count: files.length })}
+              {searchTruncated ? ` · ${t('fm.searchTruncated')}` : ''}
+            </span>
+            <button className="fm-search-clear" onClick={clearSearch}>
+              {t('fm.clearSearch')}
+            </button>
+          </div>
+        )}
         {!loading && files.length > 0 && fileListTruncated && (
           <div className="fm-truncated-bar">
             <span>{t('fm.listTruncated', { shown: files.length, total: fileListTotal })}</span>
@@ -1224,8 +1291,8 @@ export function FileManager() {
         ) : files.length === 0 ? (
           <div className="fm-empty">
             <span className="fm-empty-icon"><IconFolderOpen width={32} height={32} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))' }} /></span>
-            <span>{t('fm.emptyDir')}</span>
-            <span className="fm-empty-hint">{t('fm.dragHint')}</span>
+            <span>{activeSearchQuery ? t('fm.searchNoResults') : t('fm.emptyDir')}</span>
+            {!activeSearchQuery && <span className="fm-empty-hint">{t('fm.dragHint')}</span>}
           </div>
         ) : (
           <div
@@ -1292,11 +1359,15 @@ export function FileManager() {
                   </tr>
                 )}
                 {visibleFiles.map((f) => {
-                  const fullPath = joinPath(cwd, f.name)
+                  const fullPath = entryPath(f)
                   const isDir = isDirEntry(f.path_type)
                   const isEditing = editingName === fullPath
                   const isSel = selected.has(fullPath)
                   const isChecked = checked.has(fullPath)
+                  // 搜索结果按相对路径展示父目录；目录列表没有 rel_path，不渲染
+                  const relDir = f.rel_path?.includes('/')
+                    ? f.rel_path.slice(0, f.rel_path.lastIndexOf('/'))
+                    : ''
                   return (
                     <tr
                       key={fullPath}
@@ -1335,7 +1406,10 @@ export function FileManager() {
                               onClick={(e) => e.stopPropagation()}
                             />
                           ) : (
-                            <span className="fm-name-text" title={f.name}>{f.name}</span>
+                            <>
+                              <span className="fm-name-text" title={f.rel_path ?? f.name}>{f.name}</span>
+                              {relDir && <span className="fm-search-relpath" title={f.rel_path}>{relDir}</span>}
+                            </>
                           )}
                         </div>
                       </td>

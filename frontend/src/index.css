@@ -952,8 +952,9 @@ body.fm-dragging * {
   font-size: 11px;
 }
 
-/* 列表截断提示条：默认只显示前 N 条，右侧提供显式「加载全部」出口 */
-.fm-truncated-bar {
+/* 列表提示条（截断 / 搜索结果）：默认只显示部分内容时的状态说明 */
+.fm-truncated-bar,
+.fm-search-results-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -966,7 +967,14 @@ body.fm-dragging * {
   font-family: var(--reader-font);
   font-size: 11px;
 }
-.fm-truncated-action {
+.fm-search-results-bar > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fm-truncated-action,
+.fm-search-clear {
   flex-shrink: 0;
   padding: 0;
   border: none;
@@ -976,7 +984,8 @@ body.fm-dragging * {
   font: inherit;
   text-decoration: underline;
 }
-.fm-truncated-action:hover {
+.fm-truncated-action:hover,
+.fm-search-clear:hover {
   color: var(--text-primary);
 }
 
@@ -1030,6 +1039,17 @@ body.fm-dragging * {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+/* 搜索结果的父目录（相对搜索根）：与文件名同行，弱化显示以区分同名文件 */
+.fm-search-relpath {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-size: 10px;
 }
 
 /* ── Time cell ── */

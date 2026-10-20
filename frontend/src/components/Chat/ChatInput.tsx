@@ -212,10 +212,10 @@ export function ChatInput({
     const timer = window.setTimeout(() => {
       api
         .searchFilesBySession(sessionId, atQuery)
-        .then((entries) => {
+        .then((data) => {
           if (cancelled) return
           setFileResults(
-            entries
+            data.files
               .filter(
                 (e) =>
                   (e.path_type === 'File' || e.path_type === 'SymlinkFile') && e.rel_path,

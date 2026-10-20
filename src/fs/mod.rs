@@ -256,6 +256,13 @@ impl FileEntry {
     }
 }
 
+/// Result of [`search_files`].
+pub struct SearchResults {
+    pub files: Vec<FileEntry>,
+    /// 是否触达结果数或扫描预算上限（结果是部分集）。
+    pub truncated: bool,
+}
+
 /// Convert `SystemTime` to unix milliseconds.
 fn to_timestamp(time: &SystemTime) -> u64 {
     time.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
@@ -706,23 +713,12 @@ async fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Search for files matching a query string.
-pub async fn search_files(base: &Path, rel_path: &str, query: &str) -> Result<Vec<FileEntry>> {
-    // Absolute paths (from session mode) use the path directly; relative paths join against base.
-    let dir = if Path::new(rel_path).is_absolute() {
-        PathBuf::from(rel_path)
-    } else if rel_path.is_empty() || rel_path == "." {
-        base.to_path_buf()
-    } else {
-        sanitize_path(base, rel_path)?
-    };
-    let query_lower = query.to_lowercase();
-    let mut results = Vec::new();
-
-    search_recursive(&dir, &query_lower, "", &mut results, 100, 8).await?;
-
-    Ok(results)
-}
+/// 搜索最多返回的结果数。
+const MAX_SEARCH_RESULTS: usize = 100;
+/// 搜索最多访问的目录条目数（独立于结果数的硬预算，防止病态大树拖死请求）。
+const MAX_SEARCH_SCAN_ENTRIES: usize = 100_000;
+/// 搜索最大递归深度。
+const MAX_SEARCH_DEPTH: usize = 8;
 
 const SKIP_DIRS: &[&str] = &[
     "node_modules",
@@ -739,18 +735,52 @@ const SKIP_DIRS: &[&str] = &[
     "vendor",
 ];
 
-/// Recursive search with result and depth limits.
+struct SearchBudget {
+    scanned: usize,
+    hit_limit: bool,
+}
+
+/// Search for files matching a query string.
+///
+/// 查询不含 `/` 时匹配文件名，含 `/` 时匹配相对路径（如 `src/api`）。
+/// 结果按 `rel_path` 升序返回，保证前端展示顺序确定；最多 100 条，
+/// 扫描超过 100k 条目即停止并通过 `truncated` 告知调用方。
+pub async fn search_files(base: &Path, rel_path: &str, query: &str) -> Result<SearchResults> {
+    // Absolute paths (from session mode) use the path directly; relative paths join against base.
+    let dir = if Path::new(rel_path).is_absolute() {
+        PathBuf::from(rel_path)
+    } else if rel_path.is_empty() || rel_path == "." {
+        base.to_path_buf()
+    } else {
+        sanitize_path(base, rel_path)?
+    };
+    let query_lower = query.to_lowercase();
+    let mut results = Vec::new();
+    let mut budget = SearchBudget { scanned: 0, hit_limit: false };
+
+    search_recursive(&dir, &query_lower, "", &mut results, &mut budget, MAX_SEARCH_DEPTH).await?;
+
+    results.sort_by_cached_key(|e| e.rel_path.as_deref().unwrap_or(&e.name).to_lowercase());
+
+    Ok(SearchResults { files: results, truncated: budget.hit_limit })
+}
+
+/// Recursive search with result / scan / depth limits.
 /// `prefix` 是当前目录相对搜索根的路径（根为空串），用于填充 [`FileEntry::rel_path`]。
 fn search_recursive<'a>(
     dir: &'a Path,
     query: &'a str,
     prefix: &'a str,
     results: &'a mut Vec<FileEntry>,
-    max_results: usize,
+    budget: &'a mut SearchBudget,
     max_depth: usize,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
     Box::pin(async move {
-        if results.len() >= max_results || max_depth == 0 {
+        if results.len() >= MAX_SEARCH_RESULTS || budget.scanned >= MAX_SEARCH_SCAN_ENTRIES {
+            budget.hit_limit = true;
+            return Ok(());
+        }
+        if max_depth == 0 {
             return Ok(());
         }
 
@@ -760,29 +790,49 @@ fn search_recursive<'a>(
         };
 
         while let Some(entry) = read_dir.next_entry().await? {
-            if results.len() >= max_results {
+            if results.len() >= MAX_SEARCH_RESULTS || budget.scanned >= MAX_SEARCH_SCAN_ENTRIES {
+                budget.hit_limit = true;
                 break;
             }
+            budget.scanned += 1;
 
             let name = entry.file_name().to_string_lossy().to_string();
 
-            // Skip hidden dirs and common heavy directories
+            // Skip hidden entries and common heavy directories
             if name.starts_with('.') || SKIP_DIRS.contains(&name.as_str()) {
                 continue;
             }
 
             let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
 
-            let meta = match fs::metadata(entry.path()).await {
-                Ok(m) => m,
-                Err(_) => continue, // skip inaccessible entries
+            // file_type 在多数平台来自 dirent（近乎免费）；metadata 只为命中项读取。
+            let Ok(file_type) = entry.file_type().await else {
+                continue;
             };
-            let meta2 = fs::symlink_metadata(entry.path()).await;
-            let is_symlink = meta2.map(|m| m.is_symlink()).unwrap_or(false);
-            let is_dir = meta.is_dir();
+            let is_symlink = file_type.is_symlink();
+            let is_dir = file_type.is_dir();
 
-            if name.to_lowercase().contains(query) {
-                let path_type = match (is_symlink, is_dir) {
+            let matched = if query.contains('/') {
+                rel.to_lowercase().contains(query)
+            } else {
+                name.to_lowercase().contains(query)
+            };
+
+            if matched {
+                // 仅命中项取元数据；symlink 取目标（断链跳过，沿用旧行为）。
+                let meta = if is_symlink {
+                    match fs::metadata(entry.path()).await {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    }
+                } else {
+                    match entry.metadata().await {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    }
+                };
+                let target_is_dir = meta.is_dir();
+                let path_type = match (is_symlink, target_is_dir) {
                     (true, true) => PathType::SymlinkDir,
                     (false, true) => PathType::Dir,
                     (true, false) => PathType::SymlinkFile,
@@ -799,13 +849,13 @@ fn search_recursive<'a>(
                     path_type,
                     name,
                     mtime,
-                    size: if is_dir { None } else { Some(meta.len()) },
+                    size: if target_is_dir { None } else { Some(meta.len()) },
                     rel_path: Some(rel.clone()),
                 });
             }
 
             if is_dir && !is_symlink {
-                search_recursive(&entry.path(), query, &rel, results, max_results, max_depth - 1)
+                search_recursive(&entry.path(), query, &rel, results, budget, max_depth - 1)
                     .await?;
             }
         }
@@ -950,6 +1000,68 @@ mod tests {
         let link_file = entries.iter().find(|e| e.name == "link-file").unwrap();
         assert_eq!(link_file.path_type, PathType::SymlinkFile);
         assert_eq!(link_file.size, Some(3));
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn test_search_files_sorts_by_rel_path_and_matches_name() {
+        let base = list_fixture("search_sort");
+        fs::create_dir_all(base.join("b")).unwrap();
+        fs::create_dir_all(base.join("a")).unwrap();
+        fs::write(base.join("b/one.txt"), b"x").unwrap();
+        fs::write(base.join("a/one.txt"), b"x").unwrap();
+        fs::write(base.join("a/two.rs"), b"x").unwrap();
+
+        let result = search_files(&base, "", "one").await.unwrap();
+        assert!(!result.truncated);
+        let rels: Vec<&str> = result.files.iter().filter_map(|e| e.rel_path.as_deref()).collect();
+        assert_eq!(rels, vec!["a/one.txt", "b/one.txt"]);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn test_search_files_matches_relative_path_when_query_has_slash() {
+        let base = list_fixture("search_rel");
+        fs::create_dir_all(base.join("src/api")).unwrap();
+        fs::write(base.join("src/api/files.rs"), b"x").unwrap();
+        fs::write(base.join("src/other.rs"), b"x").unwrap();
+
+        let result = search_files(&base, "", "api/files").await.unwrap();
+        let rels: Vec<&str> = result.files.iter().filter_map(|e| e.rel_path.as_deref()).collect();
+        assert_eq!(rels, vec!["src/api/files.rs"]);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn test_search_files_reports_result_limit() {
+        let base = list_fixture("search_limit");
+        for i in 0..101 {
+            fs::write(base.join(format!("match-{i:03}.txt")), b"x").unwrap();
+        }
+
+        let result = search_files(&base, "", "match").await.unwrap();
+        assert_eq!(result.files.len(), MAX_SEARCH_RESULTS);
+        assert!(result.truncated);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn test_search_files_skips_hidden_and_heavy_dirs() {
+        let base = list_fixture("search_skip");
+        fs::create_dir_all(base.join(".secret")).unwrap();
+        fs::create_dir_all(base.join("node_modules")).unwrap();
+        fs::create_dir_all(base.join("visible")).unwrap();
+        fs::write(base.join(".secret/needle.txt"), b"x").unwrap();
+        fs::write(base.join("node_modules/needle.txt"), b"x").unwrap();
+        fs::write(base.join("visible/needle.txt"), b"x").unwrap();
+
+        let result = search_files(&base, "", "needle").await.unwrap();
+        let rels: Vec<&str> = result.files.iter().filter_map(|e| e.rel_path.as_deref()).collect();
+        assert_eq!(rels, vec!["visible/needle.txt"]);
 
         let _ = fs::remove_dir_all(&base);
     }

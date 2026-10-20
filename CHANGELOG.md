@@ -58,12 +58,14 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-10-20 10:44) `[frontend]` `[backend]` `[api]` 文件搜索优化：遍历改为按需 stat（普通条目只读 `file_type`，命中项才取 metadata），增加 100k 扫描预算；结果按 `rel_path` 确定性排序，`GET /files/search` 返回 `{files,truncated}`，最多 100 条并明示截断；搜索态新增结果横幅/清除，表头排序改为本地排序，SSE 不再覆盖搜索结果（2 万文件树罕见查询实测 ~0.8s → ~0.05s）（`src/fs/mod.rs`、`src/api/files.rs`、`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/FileManager/fileListSort.ts`、`frontend/src/api/client.ts`）
 - (2026-10-20 10:22) `[frontend]` `[backend]` `[api]` 文件管理器列表加入 wire 级上限：目录列表默认最多返回 5000 条并带 `total`/`truncated`，超出时表格上方显示「前 N / 共 M 项」与「加载全部」（`all=true` 显式绕过）；目录浏览弹窗同样只返回目录并应用该上限。**BREAKING** 项目兜底 `GET /files?workspace=` 从裸数组改为 `{files,total,truncated}`（当前前端未使用该路径）（`src/api/files.rs`、`src/api/system.rs`、`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/hooks/useDirBrowser.ts`）
 - (2026-10-20 10:11) `[frontend]` `[backend]` `[api]` 文件管理器大目录加载优化：目录列表不再为每个子目录额外 `read_dir` 预统计条目数（目录 Size 列显示 `-`，接口 `size` 对目录为 `null`），普通条目元数据从两次 stat 合并为一次；文件表格超过 200 行启用虚拟滚动，只渲染可视区 + overscan（`src/fs/mod.rs`、`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/FileManager/fileListWindow.ts`、`frontend/src/components/FileManager/useFileDrag.ts`）
 - (2026-10-20 02:10) `[backend]` 版本探测支持可选 GitHub token：每次请求现读 `GH_TOKEN`/`GITHUB_TOKEN`（优先级同 `gh`，不落盘），有效时以 Bearer 认证把 API 额度提升到 5000 次/时；token 缺失/失效/额度耗尽继续按渠道降级。两个变量加入 `startup_leak_env_vars`，不再继承进 tmux/pty/ACP agent 及 update 子进程（`src/update.rs`、`src/engine/pty_io.rs`、`src/acp/agent_proc.rs`）
 
 ### Fixed
 
+- (2026-10-20 10:44) `[frontend]` 修复文件搜索结果路径错误：同名嵌套文件此前用 `cwd + name` 计算完整路径，点击/拖拽/删除可能指向根目录同名文件；现统一使用后端 `rel_path`，并在结果行弱化显示相对目录以区分同名项（`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/FileManager/useFileDrag.ts`）
 - (2026-10-20 02:55) `[frontend]` 修复 GIT 面板写操作并发时第二个操作未执行却提示成功：`gitStore.mutate` 忙时返回 `false`，调用方不再弹成功 toast / 刷新（hunk 快速连点场景尤易触发）（`frontend/src/stores/gitStore.ts`）
 - (2026-10-20 01:15) `[frontend]` `[backend]` 修复长期打开的标签页收不到新版本提醒：UpdateBadge 从「挂载时一次性探测、失败静默吞掉」改为每 10 分钟轮询并在页面恢复可见/网络恢复时补查（失败保留 console 诊断），服务端版本成功缓存 1h→15min 且主源/降级源失败写入 daemon 日志（`frontend/src/components/Sidebar/UpdateBadge.tsx`、`src/api/system.rs`）
 

@@ -1178,7 +1178,9 @@ async fn search_files(
     };
 
     match fs::search_files(&base, rel_path, &q.q).await {
-        Ok(entries) => (StatusCode::OK, Json(json!(entries))),
+        Ok(result) => {
+            (StatusCode::OK, Json(json!({ "files": result.files, "truncated": result.truncated })))
+        }
         Err(e) => {
             error!("search failed: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
@@ -1574,6 +1576,28 @@ mod handler_tests {
         assert_eq!(v["is_outside_workspace"].as_bool(), Some(false));
         assert_eq!(v["total"].as_u64(), Some(0));
         assert_eq!(v["truncated"].as_bool(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn search_files_response_wraps_files_and_truncated() {
+        let state = test_state().await;
+        let (base, _outside) = fixture_session(&state).await;
+        std::fs::write(base.join("needle.txt"), b"x").unwrap();
+
+        let q = SearchQuery {
+            q: "needle".into(),
+            path: None,
+            workspace: None,
+            session: Some("test-session".into()),
+            workspace_id: None,
+        };
+        let res = search_files(State(state), Query(q)).await.into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let v = body_json(res).await;
+        assert_eq!(v["files"].as_array().unwrap().len(), 1);
+        assert_eq!(v["truncated"].as_bool(), Some(false));
+        assert_eq!(v["files"][0]["rel_path"].as_str(), Some("needle.txt"));
     }
 
     #[tokio::test]

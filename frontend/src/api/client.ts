@@ -142,6 +142,12 @@ export interface FileEntry {
   rel_path?: string
 }
 
+export interface SearchResponse {
+  files: FileEntry[]
+  /** 是否触达结果数或扫描预算上限（结果是部分集） */
+  truncated?: boolean
+}
+
 export interface Workspace {
   id: string
   project_id: string
@@ -660,7 +666,7 @@ export const api = {
   copyFiles: (workspace: string, paths: string[], destination: string) =>
     request('/files/copy', { method: 'POST', body: JSON.stringify({ paths, destination, workspace }) }),
   searchFiles: (workspace: string, query: string, path?: string) =>
-    request<FileEntry[]>(`/files/search?workspace=${workspace}&q=${encodeURIComponent(query)}&path=${path || ''}`),
+    request<SearchResponse>(`/files/search?workspace=${workspace}&q=${encodeURIComponent(query)}&path=${path || ''}`),
 
   // Files by session (follows terminal CWD)
   listFilesBySession: (sessionId: string, path?: string, sort?: string, desc?: boolean) => {
@@ -689,7 +695,7 @@ export const api = {
   renameBySession: (sessionId: string, path: string, newName: string) =>
     request('/files/rename', { method: 'POST', body: JSON.stringify({ path, newName, session: sessionId }) }),
   searchFilesBySession: (sessionId: string, query: string, path?: string) =>
-    request<FileEntry[]>(`/files/search?session=${sessionId}&q=${encodeURIComponent(query)}&path=${path || ''}`),
+    request<SearchResponse>(`/files/search?session=${sessionId}&q=${encodeURIComponent(query)}&path=${path || ''}`),
   readFileBySession: (sessionId: string, path: string) =>
     request<{ content: string }>(`/files/read?session=${sessionId}&path=${encodeURIComponent(path)}`),
   writeFileBySession: (sessionId: string, path: string, content: string) =>
@@ -823,7 +829,7 @@ export const api = {
     if (params.session) url += `&session=${params.session}`
     if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
     if (params.projectId) url += `&workspace=${params.projectId}`
-    return request<FileEntry[]>(url)
+    return request<SearchResponse>(url)
   },
 
   // ── Git panel (docs/dev/plans/archive/2026-07-26-git-panel.md ADR-2: repo bound

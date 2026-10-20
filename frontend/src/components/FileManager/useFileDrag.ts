@@ -10,6 +10,8 @@ interface FileEntry {
   name: string
   mtime: number
   size: number | null
+  /** 相对搜索根的路径，仅搜索结果返回 */
+  rel_path?: string
 }
 
 type FmSource = { type: 'session'; id: string } | { type: 'workspace'; id: string }
@@ -116,7 +118,8 @@ export function useFileDrag(opts: UseFileDragOptions) {
     setIsDragging(true)
 
     const { cwd: curCwd, selected: sel } = optsRef.current
-    const fullPath = curCwd ? `${curCwd}/${ds.entry.name}` : ds.entry.name
+    const rel = ds.entry.rel_path ?? ds.entry.name
+    const fullPath = curCwd ? `${curCwd}/${rel}` : rel
     const isSel = sel.has(fullPath)
     const paths = isSel ? Array.from(sel) : [fullPath]
     ds.paths = paths
