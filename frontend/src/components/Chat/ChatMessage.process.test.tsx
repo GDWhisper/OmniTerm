@@ -485,6 +485,8 @@ describe('ProcessBlocks 边界：不改变无容器场景的行为', () => {
     expect(row.textContent).not.toContain('权限请求')
     click(processHeader())
     expect(row.textContent).toContain('权限请求')
+    // 展开后 system 告知与容器外同形态（同一个 SystemBlockView）。
+    expect(row.querySelector('.chat-system-panel')).toBeTruthy()
   })
 
   it('无 text 结论时（纯过程块）收纳行仍正常', () => {
@@ -533,5 +535,7 @@ describe('ProcessBlocks mid-turn SYSTEM 告知归组', () => {
     })
     // 收纳行收起，但结论后的告知不属于「结论之前」前缀 → 仍原位可见。
     expect(container.textContent).toContain('test.notice.tail')
+    // 容器外的告知同样成盒（两条渲染路径形态一致）。
+    expect(container.querySelector('.chat-system-panel')).toBeTruthy()
   })
 })

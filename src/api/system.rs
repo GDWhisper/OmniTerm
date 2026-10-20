@@ -213,7 +213,14 @@ static PENDING_RESTART: AtomicBool = AtomicBool::new(false);
 static TARGET_VERSION: Mutex<Option<String>> = Mutex::const_new(None);
 
 /// 持锁查询 latest 版本：命中 TTL 内缓存直接返回，否则打 GitHub API 并回填。
-async fn cached_latest() -> Result<Version, String> {
+///
+/// GitHub API 失败（匿名配额 403 / 不可达）时按渠道降级到该渠道自己的版本源
+/// （`update::fetch_latest_version`）：npm/cargo 的安装源与 GitHub releases 页都
+/// 不受 60 次/时/IP 的匿名配额限制。降级成功按正常结果缓存 1h；降级也失败才
+/// 回填错误（负缓存 5min）。没有降级时，共享出口 IP 配额被陌生流量耗尽的部署
+/// 会整小时看不到更新提醒（v0.3.2 发布日实测：正式版 `/system/version`
+/// 502，前端 silent 降级，徽标不出现）。
+async fn cached_latest(channel: update::Channel) -> Result<Version, String> {
     let mut cache = VERSION_CACHE.lock().await;
     if let Some(entry) = cache.as_ref() {
         let ttl = if entry.result.is_ok() { VERSION_CACHE_TTL } else { VERSION_CACHE_NEG_TTL };
@@ -221,22 +228,29 @@ async fn cached_latest() -> Result<Version, String> {
             return entry.result.clone();
         }
     }
-    let result = update::fetch_latest().await.map(|r| r.version).map_err(|e| format!("{e:#}"));
+    let result = match update::fetch_latest().await {
+        Ok(r) => Ok(r.version),
+        Err(primary) => match update::fetch_latest_version(channel).await {
+            Ok(v) => Ok(v),
+            Err(_) => Err(format!("{primary:#}")),
+        },
+    };
     *cache = Some(CacheEntry { at: Instant::now(), result: result.clone() });
     result
 }
 
 async fn version_check() -> (StatusCode, Json<Value>) {
     let current = env!("CARGO_PKG_VERSION");
-    let latest = match cached_latest().await {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_GATEWAY, Json(json!({ "error": e }))),
-    };
+    // 渠道判定先于版本查询：降级源按渠道选择（npm/cargo 安装源 / releases 页）
     let channel = match update::current_exe_channel() {
         Ok((_, c)) => c,
         Err(e) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })));
         }
+    };
+    let latest = match cached_latest(channel).await {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_GATEWAY, Json(json!({ "error": e }))),
     };
     let update_available = match Version::parse(current) {
         Ok(cur) => latest > cur,
@@ -299,21 +313,36 @@ async fn run_update(State(_state): State<AppState>) -> (StatusCode, Json<Value>)
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })));
         }
     };
-    // 升级前强制 fresh 查询，避免缓存期内版本已变
-    let release = match update::fetch_latest().await {
-        Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("{e:#}") }))),
-    };
-    if release.version <= current {
-        return (StatusCode::CONFLICT, Json(json!({ "error": "already up to date" })));
-    }
-
     let (exe, channel) = match update::current_exe_channel() {
         Ok(v) => v,
         Err(e) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })));
         }
     };
+    // 升级前强制 fresh 查询，避免缓存期内版本已变。npm 渠道的升级不依赖 assets
+    // （走 npm install），GitHub API 限流时用渠道版本源拿到 latest 即可继续；
+    // 其余渠道保持原明确报错（github_release 的自替换需要 assets，cargo 不支持一键）。
+    let release = match update::fetch_latest().await {
+        Ok(r) => r,
+        Err(primary) => {
+            if channel == update::Channel::Npm {
+                match update::fetch_latest_version(channel).await {
+                    Ok(version) => update::LatestRelease::version_only(version),
+                    Err(_) => {
+                        return (
+                            StatusCode::BAD_GATEWAY,
+                            Json(json!({ "error": format!("{primary:#}") })),
+                        );
+                    }
+                }
+            } else {
+                return (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("{primary:#}") })));
+            }
+        }
+    };
+    if release.version <= current {
+        return (StatusCode::CONFLICT, Json(json!({ "error": "already up to date" })));
+    }
 
     let result = match channel {
         update::Channel::Cargo => {

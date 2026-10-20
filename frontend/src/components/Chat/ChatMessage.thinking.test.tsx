@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { ChatMessageView } from './ChatMessage'
@@ -12,7 +12,7 @@ import i18n from '../../i18n'
 // ③ 实时思考行**仅流式期间**显示，内容是一行**未经任何总结**的思考原文
 //    （最后一个非空行），溢出靠「视口滚动到末尾」让最新 token 始终可见，
 //    不再用 text-overflow: ellipsis（那会冻结旧前缀、裁掉最新内容）；
-// ④ 状态标签分流式态「正在思考」（扫光）与完成态「思考 · 持续了 N 秒」。
+// ④ 状态标签分流式态「正在思考」（扫光）与完成态「深度思考」。
 
 let container: HTMLDivElement
 let root: Root
@@ -160,36 +160,11 @@ describe('ThoughtBlockView 折叠态状态标签', () => {
     expect(shimmer!.textContent).toBe(i18n.t('chat.thinking'))
   })
 
-  it('已完成且收起时标签为「思考 · 耗时」，不带扫光', () => {
+  it('已完成且收起时标签为「深度思考」，不带扫光', () => {
     useAppStore.setState({ expandThinking: false, thinkingCollapsedMode: 'brief' })
-    // 历史块从未见过 streaming=true → 耗时保持 undefined → 回落「持续了几秒」
     render(thoughtMessage('想完了'))
     expect(thinkingBlock()!.querySelector('.thinking-shimmer')).toBeNull()
     expect(thinkingBlock()!.textContent).toContain(i18n.t('chat.thought'))
-    expect(thinkingBlock()!.textContent).toContain(i18n.t('chat.thoughtDurationFewSeconds'))
-  })
-
-  it('流式结束后耗时定档成具体秒数（亚秒也至少 1 秒）', () => {
-    vi.useFakeTimers()
-    try {
-      useAppStore.setState({ expandThinking: false, thinkingCollapsedMode: 'brief' })
-      render(thoughtMessage('正在想', true))
-      // 思考块收在消息级过程容器里，而容器在流式结束边沿上会自动折叠、**连块一起
-      // 卸载**（定档值随之丢失，回落「持续了几秒」）。要让块活着观察到定档，必须先
-      // 让用户干预过——干预后自动折叠不再插手。折一下再展开 = 干预。
-      const procHeader = container.querySelector<HTMLButtonElement>('.process-header-btn')!
-      click(procHeader)
-      click(procHeader)
-      act(() => {
-        vi.advanceTimersByTime(3000)
-      })
-      render(thoughtMessage('想完了', false))
-      expect(thinkingBlock()!.textContent).toContain(
-        i18n.t('chat.thoughtDurationSeconds', { seconds: 3 }),
-      )
-    } finally {
-      vi.useRealTimers()
-    }
   })
 
   it('箭头收起态默认隐藏、展开态常显并转向下（CSS 控制，这里断言接线）', () => {

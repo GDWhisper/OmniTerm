@@ -778,6 +778,31 @@ export const api = {
     if (params.allowEscape) url += '?allow_escape=true'
     return request(url, { method: 'POST', body: JSON.stringify(body) })
   },
+  // ── AI commit message settings ──
+  getAiCommitConfig: () =>
+    request<AiCommitConfig>('/settings/ai-commit', { silent: true }),
+  setAiCommitConfig: (body: {
+    provider: AiCommitProvider
+    base_url: string
+    model: string
+    api_key?: string
+    clear_api_key?: boolean
+  }) =>
+    request<AiCommitConfig>('/settings/ai-commit', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+      silent: true,
+    }),
+  listAiCommitModels: (body: {
+    provider: Exclude<AiCommitProvider, 'off'>
+    base_url: string
+    api_key?: string
+  }) =>
+    request<{ models: AiCommitModel[]; truncated: boolean }>('/settings/ai-commit/models', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      silent: true,
+    }),
   searchFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; query: string; path?: string }) => {
     let url = `/files/search?q=${encodeURIComponent(params.query)}&path=${params.path || ''}`
     if (params.session) url += `&session=${params.session}`
@@ -808,14 +833,48 @@ export const api = {
     request('/git/stage', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), paths }), silent: true }),
   gitUnstage: (bind: GitBind, paths: string[]) =>
     request('/git/unstage', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), paths }), silent: true }),
-  gitCommit: (bind: GitBind, message: string) =>
-    request('/git/commit', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), message }), silent: true }),
+  gitCommit: (bind: GitBind, message: string, amend = false) =>
+    request('/git/commit', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), message, amend }), silent: true }),
   gitDiscard: (bind: GitBind, files: { path: string; untracked: boolean }[]) =>
     request('/git/discard', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), files }), silent: true }),
+  gitStashList: (bind: GitBind) =>
+    request<{ stashes: GitStashEntry[]; truncated?: boolean } | { is_repo: false }>(
+      `/git/stash/list?${gitBindQuery(bind)}`,
+    ),
+  gitStashPush: (bind: GitBind, message: string | undefined, includeUntracked: boolean) =>
+    request('/git/stash/push', {
+      method: 'POST',
+      body: JSON.stringify({ ...gitBindBody(bind), message, include_untracked: includeUntracked }),
+      silent: true,
+    }),
+  gitStashApply: (bind: GitBind, index: number) =>
+    request('/git/stash/apply', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), index }), silent: true }),
+  gitStashPop: (bind: GitBind, index: number) =>
+    request('/git/stash/pop', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), index }), silent: true }),
+  gitStashDrop: (bind: GitBind, index: number) =>
+    request('/git/stash/drop', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), index }), silent: true }),
+  gitCherryPick: (bind: GitBind, sha: string) =>
+    request('/git/cherry-pick', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), sha }), silent: true }),
+  gitRevertCommit: (bind: GitBind, sha: string) =>
+    request('/git/revert-commit', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), sha }), silent: true }),
+  gitReset: (bind: GitBind, sha: string, mode: 'soft' | 'mixed') =>
+    request('/git/reset', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), sha, mode }), silent: true }),
+  gitGenerateCommitMessage: (bind: GitBind) =>
+    request<AiCommitGeneratedMessage>('/git/commit-message', {
+      method: 'POST',
+      body: JSON.stringify(gitBindBody(bind)),
+      silent: true,
+    }),
   gitCheckout: (bind: GitBind, branch: string) =>
     request('/git/checkout', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), branch }), silent: true }),
   gitCreateBranch: (bind: GitBind, name: string) =>
     request('/git/branch', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), name }), silent: true }),
+  gitDeleteBranch: (bind: GitBind, name: string, force: boolean) =>
+    request('/git/branch/delete', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), name, force }), silent: true }),
+  gitRenameBranch: (bind: GitBind, name: string, newName: string) =>
+    request('/git/branch/rename', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), name, new_name: newName }), silent: true }),
+  gitDeleteRemoteBranch: (bind: GitBind, name: string, remote: string) =>
+    request('/git/branch/delete-remote', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), name, remote }), silent: true }),
   gitPush: (bind: GitBind) =>
     request('/git/push', { method: 'POST', body: JSON.stringify(gitBindBody(bind)), silent: true }),
   gitPull: (bind: GitBind) =>
@@ -888,4 +947,44 @@ export interface GitCommitDetail {
 export interface GitBranch {
   name: string
   current: boolean
+  /** Short upstream ref (e.g. `origin/dev`) when the branch tracks one. */
+  upstream?: string
+}
+
+export interface GitStashEntry {
+  index: number
+  date: string
+  message: string
+}
+
+// ── AI commit message settings ──
+export type AiCommitProvider = 'off' | 'openai' | 'anthropic'
+
+export type AiCommitKeySource = 'file' | 'env' | null
+
+export interface AiCommitConfig {
+  provider: AiCommitProvider
+  base_url: string
+  model: string
+  /** Server only reports presence; the key itself is never returned. */
+  has_api_key: boolean
+  /** `file` = stored literal, `env` = `$VAR` reference resolved at request time. */
+  api_key_source: AiCommitKeySource
+  api_key_env: string | null
+  /** `false` when the referenced environment variable is not currently set. */
+  api_key_env_set: boolean | null
+}
+
+export interface AiCommitModel {
+  id: string
+  label: string
+}
+
+export interface AiCommitGeneratedMessage {
+  message: string
+  provider: AiCommitProvider
+  model: string
+  file_count: number
+  omitted_files: number
+  omitted_chars: number
 }

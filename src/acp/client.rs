@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    BlobResourceContents, CancelNotification, ConfigOptionUpdate, ContentBlock,
+    BlobResourceContents, CancelNotification, ClientCapabilities, ConfigOptionUpdate, ContentBlock,
     CreateTerminalRequest, DeleteSessionRequest, EmbeddedResource, EmbeddedResourceResource,
     ImageContent, InitializeRequest, KillTerminalRequest, ListSessionsRequest, LoadSessionRequest,
     NewSessionRequest, PromptRequest, PromptResponse, ReadTextFileRequest, ReadTextFileResponse,
@@ -15,11 +15,16 @@ use agent_client_protocol::schema::v1::{
     TextResourceContents, WaitForTerminalExitRequest, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{AcpAgent, Agent as AcpAgentRole, ConnectionTo, Error as AcpError};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::acp::agent_proc;
+use crate::acp::async_tasks::{
+    AsyncTaskEvent, AsyncTaskRegistry, AsyncTaskUpdate, SYSTEM_LABEL_ASYNC_TASK_FINISHED,
+    SYSTEM_LABEL_ASYNC_TASK_STARTED,
+};
+use crate::acp::chat_persistence;
 use crate::acp::config_prefs;
 use crate::acp::handler::{self, SeqNotification};
 use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
@@ -332,6 +337,13 @@ pub struct AcpClient {
     perm_timeout: Arc<Mutex<Option<Arc<PermissionTimeoutConfig>>>>,
     /// 活跃度跟踪，供空闲回收看护任务（reaper）读取。
     activity: Arc<Mutex<ActivityState>>,
+    /// agent 侧仍在运行的后台任务（Workflow / 后台 Bash）。
+    ///
+    /// ACP 核心协议没有后台任务语义：turn 以 `end_turn` 结束后宿主只看到
+    /// `active_prompt = false`。适配器的 `async_task_*` 扩展帧是唯一能证明
+    /// “它还在干活”的信号；`is_idle_stale` 必须把它并入判定，否则 reaper 会在
+    /// 空闲阈值到达时杀掉 agent 进程，连带杀掉任务（2026-10-19 事故）。
+    async_tasks: Arc<Mutex<AsyncTaskRegistry>>,
     /// turn 非正常结束留痕的世代守卫（计划 2026-09-19 D1/D2「只写一条」）。
     ///
     /// turn 结束路径上有两个可能同时作用于同一 turn 的收尾者：reaper 的
@@ -468,6 +480,180 @@ fn resolve_fs_path(base: &Path, requested: &Path) -> Result<PathBuf, String> {
 // ---------------------------------------------------------------------------
 // POSIX cwd 修复 + agent pid 自报：见 `acp::agent_proc`（wrap_agent_with_cwd）
 // ---------------------------------------------------------------------------
+
+/// `session/update` 的原始接收类型。
+///
+/// 不能直接用 SDK 的 `SessionNotification`：它的 `SessionUpdate` 是封闭枚举，
+/// 未知的 `sessionUpdate` 值（JetBrains AIR 的 `async_task_*` 扩展）会让整个
+/// 通知反序列化失败。这里先收原始 JSON，已知变体再转成 `SessionNotification`，
+/// 扩展变体交给 [`AsyncTaskRegistry`]，其余按 ACP 扩展规则静默忽略。
+#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcNotification)]
+#[notification(method = "session/update")]
+struct RawSessionNotification {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    update: serde_json::Value,
+    #[serde(default, rename = "_meta")]
+    meta: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// initialize 时声明的客户端能力。
+///
+/// 只额外声明 JetBrains AIR 的 `asyncTasks` 扩展：适配器据此发送后台任务生命周期
+/// 帧（`async_task_spawned` / `async_task_progress` / `async_task_state_update`）。
+/// 不声明时适配器不会发这些帧，OmniTerm 既看不到进度，reaper 也会把“等待后台
+/// workflow”的会话当空闲回收（2026-10-19 正式库事故）。
+///
+/// 其余 AIR 扩展（nativeSubagentSessions / diffPatch / planFile …）不消费，不声明；
+/// 未声明的能力适配器不会发送，属于显式 opt-in。
+fn initialize_request() -> InitializeRequest {
+    let mut air = serde_json::Map::new();
+    air.insert("version".into(), serde_json::json!(1));
+    air.insert("capabilities".into(), serde_json::json!(["asyncTasks"]));
+    let mut jetbrains = serde_json::Map::new();
+    jetbrains.insert("air".into(), serde_json::Value::Object(air));
+    let mut meta = serde_json::Map::new();
+    meta.insert("jetbrains".into(), serde_json::Value::Object(jetbrains));
+    let mut capabilities = ClientCapabilities::new();
+    capabilities.meta = Some(meta);
+    InitializeRequest::new(ProtocolVersion::V1).client_capabilities(capabilities)
+}
+
+/// 通知分流的共享依赖。字段集持续扩展（activity / accumulator / commands /
+/// config / async tasks / notices / broadcast），用具名结构而非位置参数——
+/// 新增一条通路时不会因参数顺序错位而静默串线（工程准则 7③）。
+struct NotificationContext<'a> {
+    activity: &'a Arc<Mutex<ActivityState>>,
+    accumulator: &'a Arc<TurnAccumulator>,
+    commands_notif: &'a Arc<Mutex<Option<SessionNotification>>>,
+    config_prefs_slot: &'a Arc<Mutex<Option<config_prefs::ConfigPrefsHandle>>>,
+    async_tasks: &'a Arc<Mutex<AsyncTaskRegistry>>,
+    system_notice_tx: &'a broadcast::Sender<SystemNotice>,
+    tx: &'a broadcast::Sender<SeqNotification>,
+}
+
+/// 原始 `session/update` 的分流入口。
+///
+/// - 已知 `SessionUpdate`：转回 `SessionNotification`，走原有累积/落库/广播链路；
+/// - `async_task_*`：更新注册表，开始/结束各产出一次系统消息；
+/// - 其他未知扩展：只刷新活动时间后忽略（agent 还活着，但不猜测语义）。
+async fn on_raw_agent_notification(
+    context: NotificationContext<'_>,
+    raw: RawSessionNotification,
+) -> Result<(), agent_client_protocol::Error> {
+    // 任意通知都刷新最后活动时间——扩展帧同样证明 agent 在干活。
+    if let Ok(mut st) = context.activity.lock() {
+        st.last_activity = Instant::now();
+    }
+
+    let RawSessionNotification { session_id, update, meta } = raw;
+    // 先看判别串再决定解析目标：已知帧不复制 update（tool_call 的 rawInput 可能
+    // 很大，P1 的字节维度不能在热路径上再翻一倍）。
+    let is_async_task = update
+        .get("sessionUpdate")
+        .and_then(|value| value.as_str())
+        .is_some_and(|kind| kind.starts_with("async_task_"));
+
+    if is_async_task {
+        match serde_json::from_value::<AsyncTaskUpdate>(update) {
+            Ok(update) => {
+                let event = match context.async_tasks.lock() {
+                    Ok(mut registry) => registry.apply(update),
+                    Err(poisoned) => poisoned.into_inner().apply(update),
+                };
+                if let Some(event) = event {
+                    emit_async_task_event(
+                        context.config_prefs_slot,
+                        context.system_notice_tx,
+                        event,
+                    )
+                    .await;
+                }
+            }
+            Err(parse_error) => {
+                tracing::debug!(error = %parse_error, "ignoring malformed async task update");
+            }
+        }
+        return Ok(());
+    }
+
+    match serde_json::from_value::<SessionUpdate>(update) {
+        Ok(update) => {
+            let notification = SessionNotification::new(SessionId::new(session_id), update);
+            let notification = match meta {
+                Some(meta) => notification.meta(Some(meta)),
+                None => notification,
+            };
+            on_agent_notification(
+                context.activity,
+                context.accumulator,
+                context.commands_notif,
+                context.config_prefs_slot,
+                context.tx,
+                notification,
+            )
+            .await
+        }
+        Err(parse_error) => {
+            // ACP 扩展规则：不识别的通知 SHOULD 忽略。只留 debug，避免未知厂商
+            // 扩展把连接日志刷满。
+            tracing::debug!(error = %parse_error, "ignoring unknown session update");
+            Ok(())
+        }
+    }
+}
+
+/// 把后台任务开始/结束写进聊天流：有绑定会话时落 system 行（刷新后仍可见），
+/// 同时广播给在线 WS 连接。
+async fn emit_async_task_event(
+    config_prefs_slot: &Arc<Mutex<Option<config_prefs::ConfigPrefsHandle>>>,
+    system_notice_tx: &broadcast::Sender<SystemNotice>,
+    event: AsyncTaskEvent,
+) {
+    let (started, task) = match event {
+        AsyncTaskEvent::Started(task) => (true, task),
+        AsyncTaskEvent::Finished(task) => (false, task),
+    };
+    let label =
+        if started { SYSTEM_LABEL_ASYNC_TASK_STARTED } else { SYSTEM_LABEL_ASYNC_TASK_FINISHED };
+    let detail = serde_json::json!({
+        "async_task_name": task.name,
+        "async_task_type": task.task_type,
+        "async_task_state": task.state.as_str(),
+        "async_task_summary": task.summary,
+    });
+
+    if let Some(handle) = config_prefs_slot.lock().ok().and_then(|guard| guard.clone()) {
+        let blocks = serde_json::json!([{
+            "type": "system",
+            "label": label,
+            "detail": detail,
+        }])
+        .to_string();
+        let text = if started {
+            format!("后台任务已启动：{}", task.name)
+        } else {
+            format!("后台任务已结束：{}（{}）", task.name, task.state.as_str())
+        };
+        if let Err(e) = chat_persistence::insert_message(
+            &handle.db,
+            &handle.db_session_id,
+            "system",
+            &text,
+            Some(&blocks),
+        )
+        .await
+        {
+            tracing::warn!(error = %e, "failed to persist async task system notice");
+        }
+    }
+
+    let _ = system_notice_tx.send(SystemNotice {
+        label: label.to_string(),
+        detail: Some(detail),
+        notice_id: None,
+    });
+}
 
 /// 两个构造器（session/new 与 spawn_and_load）共用的 agent 通知处理：活动刷新、
 /// turn 累积、命令通知缓存、配置快照落库、广播。提取自两份逐行相同的闭包体——
@@ -712,6 +898,7 @@ impl AcpClient {
         let permission_manager = Arc::new(PermissionManager::new());
         let pm = permission_manager.clone();
         let activity = Arc::new(Mutex::new(ActivityState::new()));
+        let async_tasks = Arc::new(Mutex::new(AsyncTaskRegistry::new()));
         let commands_notif: Arc<Mutex<Option<SessionNotification>>> = Arc::new(Mutex::new(None));
         let accumulator = Arc::new(TurnAccumulator::new());
         let config_prefs_slot: Arc<Mutex<Option<config_prefs::ConfigPrefsHandle>>> =
@@ -735,13 +922,19 @@ impl AcpClient {
                     let commands_notif = commands_notif.clone();
                     let accumulator = accumulator.clone();
                     let config_prefs_slot = config_prefs_slot.clone();
-                    async move |notification: SessionNotification, _cx| {
-                        on_agent_notification(
-                            &activity,
-                            &accumulator,
-                            &commands_notif,
-                            &config_prefs_slot,
-                            &tx,
+                    let async_tasks = async_tasks.clone();
+                    let system_notice_tx = system_notice_tx.clone();
+                    async move |notification: RawSessionNotification, _cx| {
+                        on_raw_agent_notification(
+                            NotificationContext {
+                                activity: &activity,
+                                accumulator: &accumulator,
+                                commands_notif: &commands_notif,
+                                config_prefs_slot: &config_prefs_slot,
+                                async_tasks: &async_tasks,
+                                system_notice_tx: &system_notice_tx,
+                                tx: &tx,
+                            },
                             notification,
                         )
                         .await
@@ -900,10 +1093,7 @@ impl AcpClient {
             let _pid_file_cleanup = pid_file_cleanup;
             builder
                 .connect_with(transport, move |cx: ConnectionTo<AcpAgentRole>| async move {
-                    let init_resp = cx
-                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                        .block_task()
-                        .await?;
+                    let init_resp = cx.send_request(initialize_request()).block_task().await?;
                     let supports_load = init_resp.agent_capabilities.load_session;
                     let supports_image = init_resp.agent_capabilities.prompt_capabilities.image;
                     let supports_embedded =
@@ -1015,6 +1205,7 @@ impl AcpClient {
             initial_config_options: Arc::new(Mutex::new(initial_config_options)),
             available_commands_notif: commands_notif,
             activity,
+            async_tasks,
             last_noticed_generation: Mutex::new(None),
             accumulator,
             config_prefs: config_prefs_slot,
@@ -1800,7 +1991,26 @@ impl AcpClient {
             (st.active_prompt, st.last_activity)
         };
         let pending = self.permission_manager.pending_count().await;
-        !active_prompt && pending == 0 && last_activity.elapsed().as_secs() >= idle_secs
+        // 后台任务（Workflow / 后台 Bash）不占用 active_prompt：turn 已经 end_turn，
+        // 但 agent 仍在干活。没有这条豁免时 reaper 会在 idle 阈值到达后杀掉进程，
+        // 连带杀掉任务（2026-10-19 事故）。锁中毒时取回数据继续判定。
+        let active_async_tasks = self
+            .async_tasks
+            .lock()
+            .map(|registry| registry.has_active())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().has_active());
+        !active_prompt
+            && pending == 0
+            && !active_async_tasks
+            && last_activity.elapsed().as_secs() >= idle_secs
+    }
+
+    /// 当前跟踪中的后台任务数（测试/诊断用；不暴露给生产调用方做业务判断）。
+    pub fn active_async_task_count(&self) -> usize {
+        self.async_tasks
+            .lock()
+            .map(|registry| registry.active_count())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().active_count())
     }
 
     /// 是否权限请求超时无响应：有未决权限但久无活动（agent 等用户却无人应答）。

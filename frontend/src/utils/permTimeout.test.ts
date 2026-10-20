@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   PERM_TIMEOUT_NEVER_SECS,
+  permDecisionNoticeExempt,
   permTimeoutDuration,
   permTimeoutNoticeLabel,
   permTimeoutSeconds,
@@ -52,5 +53,17 @@ describe('permTimeoutNoticeLabel', () => {
     expect(permTimeoutNoticeLabel('system.permTimeout.abort', 0)).toBe('system.permTimeout.abort')
     // 未知 label（历史中文行）原样透出，不做映射。
     expect(permTimeoutNoticeLabel('权限请求超时', 0)).toBe('权限请求超时')
+  })
+})
+
+describe('permDecisionNoticeExempt', () => {
+  it('exempts only auto + always', () => {
+    expect(permDecisionNoticeExempt('auto', PERM_TIMEOUT_NEVER_SECS)).toBe(true)
+    // 30 秒档仍要等用户，通知不能免。
+    expect(permDecisionNoticeExempt('auto', 30)).toBe(false)
+    // abort/wait + 0 是「永不超时、挂起等用户」，通知是唯一提醒途径。
+    expect(permDecisionNoticeExempt('abort', PERM_TIMEOUT_NEVER_SECS)).toBe(false)
+    expect(permDecisionNoticeExempt('wait', PERM_TIMEOUT_NEVER_SECS)).toBe(false)
+    expect(permDecisionNoticeExempt('wait', 30)).toBe(false)
   })
 })

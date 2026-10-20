@@ -1,4 +1,5 @@
 pub mod agent_proc;
+pub mod async_tasks;
 pub mod chat_persistence;
 pub mod client;
 pub mod config_prefs;

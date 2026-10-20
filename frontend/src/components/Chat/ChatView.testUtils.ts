@@ -4,6 +4,7 @@ import { useChatStore } from '../../stores/chatStore'
 import { useAgentStore } from '../../stores/agentStore'
 import type { ChatMessage } from '../../stores/chatStore'
 import type { Session } from '../../api/client'
+import { clearAllChatScrollMemory } from '../../utils/chatScrollMemory'
 import '../../i18n'
 
 /**
@@ -40,17 +41,20 @@ export function setupChatViewStores() {
   useAgentStore.setState({ loaded: true })
 }
 
-/** 复位 ChatView 相关 store（chatStore 无 persist，states 需显式清空）。 */
+/** 复位 ChatView 相关 store（chatStore 无 persist，states 需显式清空）。
+ *  浏览位置记忆是模块级状态，跨用例残留会污染后续用例的恢复逻辑，一并清空。 */
 export function resetChatViewStores() {
   useChatStore.setState({ states: {} })
   useAppStore.setState({ activeSessionId: null, sessions: {} })
+  clearAllChatScrollMemory()
 }
 
-/** hydrated: true 让 ChatView 的 hydrate effect 直接跳过 GET /messages（无需 mock fetch）。 */
-export function seedChatMessages(messages: ChatMessage[]) {
+/** hydrated: true 让 ChatView 的 hydrate effect 直接跳过 GET /messages（无需 mock fetch）。
+ *  sessionId 用于给第二个会话灌入完成态（切会话用例）。 */
+export function seedChatMessages(messages: ChatMessage[], sessionId = SESSION_ID) {
   const s = useChatStore.getState()
-  s.hydrate(SESSION_ID, messages, null)
-  s.setHydrated(SESSION_ID, true)
+  s.hydrate(sessionId, messages, null)
+  s.setHydrated(sessionId, true)
 }
 
 /** ChatView 的消息滚动容器（.overlay-scroll-content 即 scrollRef 指向的节点）。 */

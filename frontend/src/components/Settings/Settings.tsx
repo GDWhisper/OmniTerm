@@ -12,6 +12,7 @@ import type { PermissionTimeoutMode } from '../../api/client'
 import { canFullscreen } from '../../hooks/useImmersive'
 import { READER_FONT } from '../../utils/fonts'
 import { AgentSettings } from './AgentSettings'
+import { AiCommitSection } from './AiCommitSection'
 import { AuthSection } from './AuthSection'
 import { AuditLogSection } from './AuditLogSection'
 import { OverlayScroll } from '../Common/OverlayScroll'
@@ -934,7 +935,7 @@ function AboutSection() {
 /* ── Category config: which sections appear in which tab ── */
 
 type SectionComponent = React.FC
-type CategoryId = 'appearance' | 'audio' | 'auth' | 'terminal' | 'sessions' | 'language' | 'mobile' | 'agents'
+type CategoryId = 'appearance' | 'audio' | 'auth' | 'terminal' | 'sessions' | 'git' | 'language' | 'mobile' | 'agents'
 
 interface Category {
   id: CategoryId
@@ -978,6 +979,11 @@ const CATEGORIES: Category[] = [
     id: 'sessions',
     labelKey: 'settings.category.sessions',
     groups: [[PermissionTimeoutSection], [SessionDisplaySection], [SessionTimeoutSection]],
+  },
+  {
+    id: 'git',
+    labelKey: 'settings.category.git',
+    groups: [[AiCommitSection]],
   },
   {
     id: 'language',

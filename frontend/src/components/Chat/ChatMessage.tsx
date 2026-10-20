@@ -205,11 +205,12 @@ const THINKING_LINE_MASK_STYLE: CSSProperties = {
   maskSize: '100% 100%',
 }
 
-/** 耗时刷新间隔（毫秒）：展开态每秒给「持续了 N 秒」进位一次。 */
-const THINKING_DURATION_TICK_MS = 1000
-
 /** 收纳行字形：与思考块的 `◆` 同族不同形，避免两块视觉混淆。 */
 const PROCESS_HEADER_ICON = '◈'
+
+/** 系统告知标记：`※` 与思考块 `◆`、收纳行 `◈` 同族不同形——system 是「信息/告知」
+ *  语义，刻意不借用工具卡的左缘状态色条（那是状态语义位，system 没有状态）。 */
+const SYSTEM_MARK_ICON = '※'
 
 /** 被收进过程容器的单块 + 它在原 blocks[] 中的下标。含中间的 text 输出。 */
 interface ProcessEntry {
@@ -358,10 +359,6 @@ function ThoughtBlockView({ text, streaming, maxWidth }: { text: string; streami
   // 思考正文整个吃掉（2026-10-14 实测踩过，见 CHANGELOG 对该条的撤销说明）。
   // 过程块的收纳已由消息级 ProcessBlocks 负责，这里不需要自己再折一次。
   const [open, setOpen] = useState(expandThinking)
-  // 耗时（对齐 ZCode）：流式开始计时、结束时定档。历史块从未见过 streaming=true，
-  // 保持 undefined，折叠态回落到「持续了几秒」。
-  const [durationSec, setDurationSec] = useState<number | undefined>(undefined)
-  const startTimeRef = useRef<number | null>(null)
   // 收起态实时思考行的视口 / 文本节点与溢出标记。
   const lineViewportRef = useRef<HTMLSpanElement | null>(null)
   const lineTextRef = useRef<HTMLSpanElement | null>(null)
@@ -372,28 +369,6 @@ function ThoughtBlockView({ text, streaming, maxWidth }: { text: string; streami
   const { containerRef: scrollRef, handleScroll: handleInnerScroll, stickToBottom, resetStick } =
     useStickScroll<HTMLDivElement>()
 
-  // 耗时只在展开态每秒刷新：收起态没必要为了一个暂时不显示的数字每秒重渲染
-  // 整块；流式结束那一刻无论展开与否都补算定档。
-  useEffect(() => {
-    if (!streaming) {
-      if (startTimeRef.current !== null) {
-        // max(1, ...)：亚秒流式也要显示「1 秒」而不是「0 秒」。
-        setDurationSec(Math.max(1, Math.ceil((Date.now() - startTimeRef.current) / 1000)))
-      }
-      startTimeRef.current = null
-      return
-    }
-    if (startTimeRef.current === null) startTimeRef.current = Date.now()
-    if (!open) return
-    const tick = () => {
-      if (startTimeRef.current === null) return
-      setDurationSec(Math.max(1, Math.ceil((Date.now() - startTimeRef.current) / 1000)))
-    }
-    tick()
-    const timer = window.setInterval(tick, THINKING_DURATION_TICK_MS)
-    return () => window.clearInterval(timer)
-  }, [open, streaming])
-
   // 流式 thinking 文本增长时把内层容器钉在底部。用 useLayoutEffect：绘制前
   // 钉住，避免溢出瞬间先闪一帧顶部内容。
   useLayoutEffect(() => {
@@ -402,7 +377,7 @@ function ThoughtBlockView({ text, streaming, maxWidth }: { text: string; streami
   }, [text, open, streaming, stickToBottom])
 
   // 收起态实时思考行：**仅流式期间**显示（对齐 ZCode——完成后折叠态只剩
-  // 「思考 · 持续了 N 秒」，不再显示思考原文），且仅 brief 档。内容是一行
+  // 「深度思考」，不再显示思考原文），且仅 brief 档。内容是一行
   // 未经任何总结的思考原文（最后一个非空行，即正在生长的那一行）。
   const summary =
     streaming && !open && collapsedMode === 'brief' ? resolveThinkingStreamingSummary(text) : null
@@ -436,7 +411,7 @@ function ThoughtBlockView({ text, streaming, maxWidth }: { text: string; streami
     if (next) resetStick()
   }
 
-  // 流式且收起 = 「正在思考」+ 扫光；其余（展开中 / 已完成）=「思考 · 耗时」。
+  // 流式且收起 = 「正在思考」+ 扫光；其余（展开中 / 已完成）=「深度思考」。
   const streamingLabel = streaming && !open
 
   return (
@@ -468,14 +443,8 @@ function ThoughtBlockView({ text, streaming, maxWidth }: { text: string; streami
             {t('chat.thinking')}
           </span>
         ) : (
-          <span style={{ flexShrink: 0, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ fontWeight: 500, color: 'var(--text-muted)' }}>{t('chat.thought')}</span>
-            <span>·</span>
-            <span>
-              {durationSec === undefined
-                ? t('chat.thoughtDurationFewSeconds')
-                : t('chat.thoughtDurationSeconds', { seconds: durationSec })}
-            </span>
+          <span style={{ flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 500, color: 'var(--text-muted)' }}>
+            {t('chat.thought')}
           </span>
         )}
         {summary && (
@@ -727,7 +696,7 @@ function TextBlockView({
   )
 }
 
-/** 系统事件标签：label 若命中 i18n key 则翻译（前端自产事件），否则原样展示（后端下发的原始文案）。
+/** 系统事件标签：渲染为嵌流信息面板（规格见 ui-style-guide §7.11）。label 若命中 i18n key 则翻译（前端自产事件），否则原样展示（后端下发的原始文案）。
  *  detail 存在时（后端权限超时行动）在文案下附结构化详情：请求工具、内容预览、
  *  当时的可选项、自动模式实际选中项——用户回来不错过自己错过了什么。
  *
@@ -735,7 +704,15 @@ function TextBlockView({
  *  `{{reason}}` 插值原样透出，AGENTS.md §8：未知协议值必须可见，不得吞掉）；这类 detail
  *  只有 `{stop_reason}`，与权限超时载荷共用 SystemBlockDetail 类型但不渲染详情区——
  *  详情区按「有权限类信息可展示」门控，否则 turn 失败提示会挂一个空壳子。 */
-function SystemBlockView({ label, detail }: { label: string; detail?: SystemBlockDetail }) {
+function SystemBlockView({
+  label,
+  detail,
+  maxWidth,
+}: {
+  label: string
+  detail?: SystemBlockDetail
+  maxWidth?: string
+}) {
   const { t } = useTranslation()
   // 时长口径统一在 utils/permTimeout.ts（秒制 + 历史 minutes 回退 +「总是」档
   // 换用不带时长的 autoAlways 文案），组件只负责插值。
@@ -758,34 +735,28 @@ function SystemBlockView({ label, detail }: { label: string; detail?: SystemBloc
   // 权限超时告知的详情区（工具/内容/选项/省略量）：只有这类载荷才需要展开。
   // `{stop_reason}` 之类的纯终态载荷不渲染，避免空 wrapper。
   const hasPermissionDetail = !!(toolDisplay || detail?.content || detail?.options?.length || detail?.extra)
+  // 后台任务告知（ACP `async_task_*` 扩展）：名称/类型/终态 + 结束摘要。
+  // 与权限详情共用 detail 结构但字段不相交，两个详情区互斥渲染。
+  const hasAsyncTaskDetail = !!(detail?.async_task_name || detail?.async_task_summary)
   return (
-    <div style={{ alignSelf: 'flex-start', color: 'var(--text-faint)', fontSize: '0.846em', maxWidth: '100%' }}>
-      <span>[{text}]</span>
+    <div className="chat-system-panel" style={{ alignSelf: 'flex-start', maxWidth }}>
+      <span style={{ display: 'inline-flex', gap: 5, alignItems: 'baseline' }}>
+        <span style={{ flexShrink: 0 }}>{SYSTEM_MARK_ICON}</span>
+        <span>{text}</span>
+      </span>
       {detail && hasPermissionDetail && (
-        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div className="chat-system-detail">
           {toolDisplay && (
             <span>
               ▸ {t('system.permTimeout.requestTool', { tool: toolDisplay, defaultValue: '▸ 请求：{{tool}}' })}
             </span>
           )}
           {detail.content && (
-            <pre
-              style={{
-                margin: 0,
-                padding: '4px 6px',
-                background: 'var(--bg-base)',
-                borderRadius: 0,
-                fontSize: '0.92em',
-                overflow: 'auto',
-                maxHeight: 120,
-                whiteSpace: 'pre-wrap',
-                color: 'var(--text-muted)',
-              }}
-            >
+            <OverlayScroll contentClassName="chat-system-pre" contentStyle={{ flex: '0 0 auto', maxHeight: 120 }}>
               {detail.content}
               {!!detail.content_omitted &&
                 ` ${t('system.permTimeout.contentOmitted', { count: detail.content_omitted, defaultValue: '…（已省略 {{count}} 字符）' })}`}
-            </pre>
+            </OverlayScroll>
           )}
           {!!detail.options?.length && (
             <span>
@@ -797,6 +768,18 @@ function SystemBlockView({ label, detail }: { label: string; detail?: SystemBloc
               {t('system.permTimeout.extra', { count: detail.extra, defaultValue: '另有 {{count}} 项审批一并处理' })}
             </span>
           )}
+        </div>
+      )}
+      {detail && hasAsyncTaskDetail && (
+        <div className="chat-system-detail">
+          {detail.async_task_name && (
+            <span>
+              ▸ {detail.async_task_type ? `${detail.async_task_type} · ` : ''}
+              {detail.async_task_name}
+              {detail.async_task_state ? ` — ${detail.async_task_state}` : ''}
+            </span>
+          )}
+          {detail.async_task_summary && <span>{detail.async_task_summary}</span>}
         </div>
       )}
     </div>
@@ -842,7 +825,9 @@ function renderBlock(
       // 看板模式：todo 在输入框上方固定展示，不再内联渲染
       return null
     case 'system':
-      return <SystemBlockView key={idx} label={block.label} detail={block.detail} />
+      return (
+        <SystemBlockView key={idx} label={block.label} detail={block.detail} maxWidth={maxWidth} />
+      )
     case 'image':
       // 图片块只出现在用户消息（附件），用户气泡有独立渲染路径；assistant 侧忽略。
       return null

@@ -5,6 +5,7 @@ import { useAcpChat, MAX_RESOLVED_PERMISSION_TOMBSTONES } from './useAcpChat'
 import { AttentionContext } from '../hooks/useAttention'
 import type { AttentionContextValue } from '../components/Attention/AttentionProvider'
 import { useChatStore } from '../stores/chatStore'
+import { useAppStore, DEFAULT_PERM_TIMEOUT_SECS } from '../stores/appStore'
 
 // 幽灵权限横幅回归（auto+「总是」档 + resolve 帧先到）：
 // permission_request 与 permission_resolved 经后端两条独立广播通道 + 两个转发
@@ -151,5 +152,77 @@ describe('useAcpChat 权限帧顺序倒置（resolve 先到）', () => {
     // 最新的 t{cap} 仍在集合内：迟到请求被抑制。
     send(ws, { type: 'permission_request', id: `t${cap}`, request: permRequest })
     expect(pendingIds()).toEqual(['t0'])
+  })
+
+  // 「自动推进 + 总是」档下后端 reaper 在请求到达时即代为应答（2026-10-09
+  // 勘误）——用户永远无需决策，decision 通知没有接收人。判定必须读帧到达时刻的
+  // store 当前值（设置可热更新），不能缓存连接建立时的旧值。
+  describe('auto+「总是」档 decision 通知豁免', () => {
+    const setPermTimeout = (mode: 'auto' | 'abort' | 'wait', secs: number) => {
+      act(() => {
+        useAppStore.setState({ permTimeoutMode: mode, permTimeoutSecs: secs })
+      })
+    }
+
+    afterEach(() => {
+      // 复位到默认档，防泄漏到同文件其他 describe。
+      setPermTimeout('abort', DEFAULT_PERM_TIMEOUT_SECS)
+    })
+
+    it('auto+「总是」：照常挂出横幅，但不发 decision 通知', () => {
+      setPermTimeout('auto', 0)
+      const ws = mount()
+      send(ws, { type: 'permission_request', id: 'p-auto', request: permRequest })
+      // banner 路径不受影响：用户仍能看到这一条（虽然后端会立即代为放行）。
+      expect(pendingIds()).toEqual(['p-auto'])
+      expect(fakeAttention.fire).not.toHaveBeenCalled()
+    })
+
+    it('auto+30 秒：仍要等用户决策，通知照常发', () => {
+      setPermTimeout('auto', 30)
+      const ws = mount()
+      send(ws, { type: 'permission_request', id: 'p-30', request: permRequest })
+      expect(fakeAttention.fire).toHaveBeenCalledWith('s1', 's1', 'decision')
+    })
+
+    it('默认档（abort / 1800 秒）：通知照常发（防门控写成永假）', () => {
+      const ws = mount()
+      send(ws, { type: 'permission_request', id: 'p-default', request: permRequest })
+      expect(fakeAttention.fire).toHaveBeenCalledWith('s1', 's1', 'decision')
+    })
+
+    it('连接内热切换档位后按新值判定（读 getState 而非闭包旧值）', () => {
+      setPermTimeout('auto', 0)
+      const ws = mount()
+      send(ws, { type: 'permission_request', id: 'p-hot-1', request: permRequest })
+      expect(fakeAttention.fire).not.toHaveBeenCalled()
+
+      setPermTimeout('auto', 30)
+      send(ws, { type: 'permission_request', id: 'p-hot-2', request: permRequest })
+      expect(fakeAttention.fire).toHaveBeenCalledTimes(1)
+      expect(fakeAttention.fire).toHaveBeenCalledWith('s1', 's1', 'decision')
+    })
+
+    it('重连后补发的 request 帧同样走豁免（与 live 帧同一分支）', () => {
+      vi.useFakeTimers()
+      try {
+        setPermTimeout('auto', 0)
+        const ws = mount()
+        act(() => {
+          ws.onclose?.()
+        })
+        act(() => {
+          vi.advanceTimersByTime(1000)
+        })
+        const ws2 = MockWebSocket.instances[1]
+        expect(ws2).toBeDefined()
+        // 后端在连接建立时会把挂起审批作为普通 permission_request 帧补发。
+        send(ws2, { type: 'permission_request', id: 'p-replay', request: permRequest })
+        expect(pendingIds()).toEqual(['p-replay'])
+        expect(fakeAttention.fire).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 })

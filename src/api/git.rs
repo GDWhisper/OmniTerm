@@ -10,6 +10,7 @@ use serde_json::json;
 use std::net::SocketAddr;
 
 use crate::AppState;
+use crate::ai_commit::{self, Provider};
 use crate::api::files::resolve_base_from_query;
 use crate::git::repo::{self, DiscardFile, GitError};
 
@@ -24,8 +25,20 @@ pub fn routes() -> Router<AppState> {
         .route("/git/unstage", post(git_unstage))
         .route("/git/commit", post(git_commit))
         .route("/git/discard", post(git_discard))
+        .route("/git/stash/list", get(git_stash_list))
+        .route("/git/stash/push", post(git_stash_push))
+        .route("/git/stash/apply", post(git_stash_apply))
+        .route("/git/stash/pop", post(git_stash_pop))
+        .route("/git/stash/drop", post(git_stash_drop))
+        .route("/git/commit-message", post(git_commit_message))
+        .route("/git/cherry-pick", post(git_cherry_pick))
+        .route("/git/revert-commit", post(git_revert_commit))
+        .route("/git/reset", post(git_reset))
         .route("/git/checkout", post(git_checkout))
         .route("/git/branch", post(git_create_branch))
+        .route("/git/branch/delete", post(git_delete_branch))
+        .route("/git/branch/rename", post(git_rename_branch))
+        .route("/git/branch/delete-remote", post(git_delete_remote_branch))
         .route("/git/push", post(git_push))
         .route("/git/pull", post(git_pull))
         .route("/git/fetch", post(git_fetch))
@@ -61,6 +74,17 @@ struct RepoBody {
     files: Vec<DiscardFile>,
     branch: Option<String>,
     name: Option<String>,
+    new_name: Option<String>,
+    #[serde(default)]
+    force: bool,
+    remote: Option<String>,
+    #[serde(default)]
+    include_untracked: bool,
+    index: Option<u32>,
+    sha: Option<String>,
+    mode: Option<String>,
+    #[serde(default)]
+    amend: bool,
 }
 
 fn git_error_response(e: GitError) -> Response {
@@ -189,8 +213,9 @@ async fn git_commit(State(state): State<AppState>, Json(b): Json<RepoBody>) -> R
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "message required" })))
             .into_response();
     };
+    let amend = b.amend;
     let root = bind_repo!(state, b);
-    match repo::commit(&root, &message).await {
+    match repo::commit(&root, &message, amend).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
         Err(e) => git_error_response(e),
     }
@@ -203,6 +228,167 @@ async fn git_discard(State(state): State<AppState>, Json(b): Json<RepoBody>) -> 
     }
     let root = bind_repo!(state, b);
     match repo::discard(&root, &b.files).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_stash_list(State(state): State<AppState>, Query(q): Query<RepoQuery>) -> Response {
+    let root = bind_repo!(state, q);
+    match repo::stash_list(&root).await {
+        Ok((stashes, truncated)) => {
+            (StatusCode::OK, Json(json!({ "stashes": stashes, "truncated": truncated })))
+                .into_response()
+        }
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_stash_push(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let root = bind_repo!(state, b);
+    match repo::stash_push(&root, b.message.as_deref(), b.include_untracked).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_stash_apply(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(index) = b.index else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "index required" })))
+            .into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::stash_apply(&root, index).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_stash_pop(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(index) = b.index else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "index required" })))
+            .into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::stash_pop(&root, index).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_stash_drop(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(index) = b.index else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "index required" })))
+            .into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::stash_drop(&root, index).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+/// Generate a commit message from the **staged** diff. One provider request per
+/// click; the frontend only fills the commit box and never auto-commits.
+async fn git_commit_message(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let root = bind_repo!(state, b);
+    let cfg = ai_commit::load_config(&state.db).await;
+    if cfg.provider == Provider::Off {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "AI commit is not configured", "code": "ai_not_configured" })),
+        )
+            .into_response();
+    }
+    if let Err(message) = ai_commit::validate_config(&cfg) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": message, "code": "ai_not_configured" })),
+        )
+            .into_response();
+    }
+
+    let context = match repo::ai_commit_context(&root).await {
+        Ok(context) => context,
+        Err(e) => return git_error_response(e),
+    };
+    let api_key = match ai_commit::resolve_api_key(&state.ai_commit_key_path) {
+        Ok(key) => key,
+        Err(e) => return crate::api::ai_commit::ai_error_response(e),
+    };
+    let (system, user) = ai_commit::generate::build_prompts(
+        &context.diff,
+        &context.subjects,
+        context.omitted_files,
+        context.omitted_chars,
+    );
+    match ai_commit::generate::generate(&cfg, api_key.as_deref(), &system, &user).await {
+        Ok(message) => {
+            // Never log prompt/diff content (it is user source code).
+            tracing::info!(
+                provider = cfg.provider.as_str(),
+                model = %cfg.model,
+                files = context.file_count,
+                omitted_files = context.omitted_files,
+                omitted_chars = context.omitted_chars,
+                "generated AI commit message"
+            );
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "message": message,
+                    "provider": cfg.provider.as_str(),
+                    "model": cfg.model,
+                    "file_count": context.file_count,
+                    "omitted_files": context.omitted_files,
+                    "omitted_chars": context.omitted_chars,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => crate::api::ai_commit::ai_error_response(e),
+    }
+}
+
+async fn git_cherry_pick(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(sha) = b.sha.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "sha required" }))).into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::cherry_pick(&root, &sha).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_revert_commit(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(sha) = b.sha.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "sha required" }))).into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::revert_commit(&root, &sha).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_reset(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(sha) = b.sha.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "sha required" }))).into_response();
+    };
+    let mode = match b.mode.as_deref() {
+        Some("soft") => repo::ResetMode::Soft,
+        Some("mixed") => repo::ResetMode::Mixed,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "mode must be soft or mixed" })),
+            )
+                .into_response();
+        }
+    };
+    let root = bind_repo!(state, b);
+    match repo::reset_to(&root, &sha, mode).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
         Err(e) => git_error_response(e),
     }
@@ -227,6 +413,46 @@ async fn git_create_branch(State(state): State<AppState>, Json(b): Json<RepoBody
     };
     let root = bind_repo!(state, b);
     match repo::create_branch(&root, &name).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_delete_branch(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(name) = b.name.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name required" })))
+            .into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::delete_branch(&root, &name, b.force).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_rename_branch(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let (Some(old), Some(new)) = (b.name.clone(), b.new_name.clone()) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name and new_name required" })))
+            .into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::rename_branch(&root, &old, &new).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_delete_remote_branch(
+    State(state): State<AppState>,
+    Json(b): Json<RepoBody>,
+) -> Response {
+    let Some(name) = b.name.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name required" })))
+            .into_response();
+    };
+    let remote = b.remote.as_deref().unwrap_or("origin");
+    let root = bind_repo!(state, b);
+    match repo::delete_remote_branch(&root, remote, &name).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
         Err(e) => git_error_response(e),
     }
