@@ -11,6 +11,12 @@ import { GITHUB_REPO_URL } from '../../version'
 const POPUP_WIDTH = 280
 // 等待「断连→恢复」的兜底窗口：超过仍未见断连或版本未变视为重启超时，回到手动重启提示
 const RESTART_WATCH_TIMEOUT_MS = 60_000
+// 版本探测节奏：服务端成功缓存 15min / 失败负缓存 5min。长期打开的标签页若只在
+// 挂载时查一次，发布新版本后永远不会出现提醒；首次探测失败（限流/重启）也会让
+// 整个页面生命周期再无重试——这正是「修了很多次仍收不到提醒」的复发路径。
+export const VERSION_CHECK_INTERVAL_MS = 10 * 60_000
+// 页面从后台恢复可见时的补查节流：服务端有缓存，但仍避免频繁切标签造成的请求风暴
+const VISIBILITY_RECHECK_THROTTLE_MS = 60_000
 
 interface VersionInfo {
   current: string
@@ -39,18 +45,50 @@ export function UpdateBadge() {
   const [targetVersion, setTargetVersion] = useState<string | null>(null)
 
   useEffect(() => {
-    api
-      .versionCheck()
-      .then((r) => {
-        if (r.update_available || r.pending_restart) {
-          setInfo(r)
-          if (r.pending_restart) {
-            setPhase('done')
-            setTargetVersion(r.target_version ?? r.latest)
-          }
+    let disposed = false
+    let inFlight = false
+    let lastCheckAt = 0
+
+    const check = async () => {
+      if (inFlight) return
+      inFlight = true
+      lastCheckAt = Date.now()
+      try {
+        const r = await api.versionCheck()
+        if (disposed) return
+        setInfo(r)
+        if (r.pending_restart) {
+          setPhase('done')
+          setTargetVersion(r.target_version ?? r.latest)
         }
-      })
-      .catch(() => {})
+      } catch (e) {
+        // 不能静默：版本探测失败（GitHub 限流 / 后端重启）时徽标本就不出现，
+        // 没有日志就只剩「又没有提醒」这一条无法取证的症状。
+        console.warn('[update] version check failed:', e)
+      } finally {
+        inFlight = false
+      }
+    }
+
+    const checkIfStale = () => {
+      if (Date.now() - lastCheckAt >= VISIBILITY_RECHECK_THROTTLE_MS) void check()
+    }
+
+    void check()
+    const timer = window.setInterval(() => void check(), VERSION_CHECK_INTERVAL_MS)
+    // 后台标签页的定时器会被节流；回到前台/网络恢复时补查一次，避免错过发布窗口
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') checkIfStale()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('online', checkIfStale)
+
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('online', checkIfStale)
+    }
   }, [])
 
   // 重启监测：轮询 health 的 version 字段，等于目标版本即确认「新版已上线」并刷新。

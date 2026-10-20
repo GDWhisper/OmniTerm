@@ -181,6 +181,7 @@
 
 **案例证据**：
 - 2026-10-18 v0.3.2 发布约 1 小时后，正式版（npm 渠道 v0.3.1）未出现更新提醒。`/api/v1/system/version` 返回 502「GitHub API rate limit reached」，`rate_limit` 显示出口 IP 54.241.214.252 的 `remaining: 0`（共享 VPN 出口，陌生流量耗尽配额）；同刻 npm 官方源 `dist-tags.latest` 已是 0.3.2。修复：`update::fetch_latest_version(channel)` 按渠道降级（npm/crates.io/releases 页），探测链路不再依赖 GitHub 匿名配额。
+- 2026-10-20 同机正式版 v0.3.2 再次未提醒 v0.3.3：v0.3.2 早于降级修复，旧版本无法通过自身探测链路获得修复（修复送达悖论，见 `frontend-react.md` 模式 14）；同刻 `/system/version` 仍为 502、npm `dist-tags.latest` 已是 0.3.3。
 - 同族前兆：2026-10-18 同机 `cargo publish` 连续 408——慢速出口链路上传 1.6MB crate 超边缘超时。都是「出口链路质量假设为无限」的同源错误，只是表现不同（配额 vs 带宽）。
 
 ---

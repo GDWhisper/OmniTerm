@@ -189,9 +189,11 @@ async fn set_mouse_mode(
     }
 }
 
-const VERSION_CACHE_TTL: Duration = Duration::from_secs(3600);
-// 失败负缓存：防止刷新页面连环触发 GitHub 匿名限流（60 次/时/IP）
-const VERSION_CACHE_NEG_TTL: Duration = Duration::from_secs(300);
+// 成功缓存 15min：版本探测的价值在于「发布后尽快告知」，1h 缓存会让新版本在发布后
+// 近一小时仍返回旧值；上游已按渠道降级，不再依赖 GitHub 匿名配额。
+const VERSION_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+// 失败负缓存：防止刷新页面连环触发上游探测（GitHub 匿名限流 60 次/时/IP）
+const VERSION_CACHE_NEG_TTL: Duration = Duration::from_secs(5 * 60);
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(300);
 // 自重启延迟：先让 POST /system/update 的响应完整 flush 回前端（keep-alive
 // 连接在 exec 后即断，响应体未读完会触发前端 fetch 异常），再 exec 新二进制。
@@ -216,10 +218,9 @@ static TARGET_VERSION: Mutex<Option<String>> = Mutex::const_new(None);
 ///
 /// GitHub API 失败（匿名配额 403 / 不可达）时按渠道降级到该渠道自己的版本源
 /// （`update::fetch_latest_version`）：npm/cargo 的安装源与 GitHub releases 页都
-/// 不受 60 次/时/IP 的匿名配额限制。降级成功按正常结果缓存 1h；降级也失败才
-/// 回填错误（负缓存 5min）。没有降级时，共享出口 IP 配额被陌生流量耗尽的部署
-/// 会整小时看不到更新提醒（v0.3.2 发布日实测：正式版 `/system/version`
-/// 502，前端 silent 降级，徽标不出现）。
+/// 不受 60 次/时/IP 的匿名配额限制。降级成功按正常结果缓存 15min；降级也失败才
+/// 回填错误（负缓存 5min），并 `eprintln` 两个源的具体错误——HTTP 响应只回到当前
+/// 标签页，daemon 日志是远程实例唯一的事后取证来源。
 async fn cached_latest(channel: update::Channel) -> Result<Version, String> {
     let mut cache = VERSION_CACHE.lock().await;
     if let Some(entry) = cache.as_ref() {
@@ -231,8 +232,18 @@ async fn cached_latest(channel: update::Channel) -> Result<Version, String> {
     let result = match update::fetch_latest().await {
         Ok(r) => Ok(r.version),
         Err(primary) => match update::fetch_latest_version(channel).await {
-            Ok(v) => Ok(v),
-            Err(_) => Err(format!("{primary:#}")),
+            Ok(version) => {
+                eprintln!(
+                    "omniterm-update: GitHub API check failed ({primary:#}); {channel:?} fallback reports v{version}"
+                );
+                Ok(version)
+            }
+            Err(fallback) => {
+                eprintln!(
+                    "omniterm-update: version check failed on both sources: GitHub API: {primary:#}; {channel:?} fallback: {fallback:#}"
+                );
+                Err(format!("{primary:#}"))
+            }
         },
     };
     *cache = Some(CacheEntry { at: Instant::now(), result: result.clone() });

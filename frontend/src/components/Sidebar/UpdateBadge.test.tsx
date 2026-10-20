@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createRoot } from 'react-dom/client'
 import { I18nextProvider } from 'react-i18next'
 import i18n from '../../i18n'
-import { UpdateBadge } from './UpdateBadge'
+import { UpdateBadge, VERSION_CHECK_INTERVAL_MS } from './UpdateBadge'
 import { api } from '../../api/client'
 import { advanceClock, realTick } from '../../test/timers'
 
@@ -192,6 +192,42 @@ describe('UpdateBadge 重启监测', () => {
 
     await advanceClock(3500)
     expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('首次探测失败后按周期重试，新版本发布后徽标出现', async () => {
+    root.unmount()
+    vi.mocked(api.versionCheck).mockReset()
+    vi.mocked(api.versionCheck)
+      .mockRejectedValueOnce(new Error('GitHub API rate limit reached'))
+      .mockResolvedValue({
+        update_available: true,
+        current: '0.3.2',
+        latest: '0.3.3',
+        channel: 'npm',
+        container: false,
+        restart_command: 'omniterm stop && omniterm start -d',
+      })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    root = createRoot(container)
+    root.render(
+      <I18nextProvider i18n={i18n}>
+        <UpdateBadge />
+      </I18nextProvider>,
+    )
+
+    // 首次失败不能静默：留下诊断，且徽标不出现
+    await vi.waitFor(() => expect(api.versionCheck).toHaveBeenCalledTimes(1))
+    expect(warn).toHaveBeenCalled()
+    expect(document.body.querySelector('.update-badge')).toBeNull()
+
+    // 周期探测命中新版本 → 徽标出现（长期打开的标签页不再需要手动刷新）
+    await vi.advanceTimersByTimeAsync(VERSION_CHECK_INTERVAL_MS)
+    await realTick()
+    await vi.waitFor(() => {
+      expect(api.versionCheck).toHaveBeenCalledTimes(2)
+      expect(document.body.querySelector('.update-badge')?.textContent?.trim()).toBe('NEW')
+    })
   })
 
   it('服务端已处于 pending_restart 状态时挂载 → 直接渲染 REBOOT 徽标', async () => {

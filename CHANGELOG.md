@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- (2026-10-20 01:15) `[frontend]` `[backend]` 修复长期打开的标签页收不到新版本提醒：UpdateBadge 从「挂载时一次性探测、失败静默吞掉」改为每 10 分钟轮询并在页面恢复可见/网络恢复时补查（失败保留 console 诊断），服务端版本成功缓存 1h→15min 且主源/降级源失败写入 daemon 日志（`frontend/src/components/Sidebar/UpdateBadge.tsx`、`src/api/system.rs`）
+
 ## [0.3.3] - 2026-10-20
 
 ### Added
