@@ -45,7 +45,17 @@ export function CreateProjectModal(props: {
   const [projPath, setProjPath] = useState('')
   // Browse path is local: the hook owns the fetched list, not the path
   const [browsePath, setBrowsePath] = useState('')
-  const { entries, loading, error, notFound, loadDirs, reset } = useDirBrowser()
+  const {
+    entries,
+    loading,
+    error,
+    notFound,
+    truncated: dirListTruncated,
+    total: dirListTotal,
+    shown: dirListShown,
+    loadDirs,
+    reset,
+  } = useDirBrowser()
   const [autocompleteActiveIndex, setAutocompleteActiveIndex] = useState(-1)
   const autocompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // 409 Conflict response data when creating a project whose path is
@@ -436,10 +446,14 @@ export function CreateProjectModal(props: {
                 >
                   <FolderSprite size={14} />
                   <span className="truncate">{entry.name}</span>
-                  <span className="ml-auto" style={{ color: 'var(--text-faint)', fontSize: 11 }}>{entry.size ?? 0}</span>
                 </div>
                 )
               })}
+              {!loading && !notFound && !error && dirListTruncated && (
+                <div className="dir-browser-truncated">
+                  {t('sidebar.dirListTruncated', { shown: dirListShown, total: dirListTotal })}
+                </div>
+              )}
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-1">

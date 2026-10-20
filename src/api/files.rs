@@ -57,6 +57,9 @@ struct FileQuery {
     /// css/js/img/字体等同目录子资源（attachment + octet-stream 下浏览器
     /// 会按 MIME 拒载样式表与脚本，图片因嗅探仍可用）。目录恒打包 zip。
     inline: Option<bool>,
+    /// 列表专用：true = 用户显式要求返回全部条目（绕过 `MAX_LIST_ENTRIES`）。
+    /// 默认截断并在响应里带 `total` / `truncated`，避免病态目录撑爆响应体。
+    all: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -120,6 +123,20 @@ fn parse_sort(sort: Option<&str>, order: Option<&str>) -> (fs::SortKey, bool) {
     };
     let desc = order == Some("desc");
     (key, desc)
+}
+
+/// 对目录列表应用 wire 级上限。返回 `(entries, total, truncated)`：
+/// `total` 是截断前的真实条目数；`all=true` 是用户显式「加载全部」出口。
+fn bounded_entries(
+    mut entries: Vec<fs::FileEntry>,
+    all: bool,
+) -> (Vec<fs::FileEntry>, usize, bool) {
+    let total = entries.len();
+    let truncated = !all && total > fs::MAX_LIST_ENTRIES;
+    if truncated {
+        entries.truncate(fs::MAX_LIST_ENTRIES);
+    }
+    (entries, total, truncated)
 }
 
 /// Resolve base path from session ID.
@@ -422,13 +439,17 @@ async fn list_files(
             (false, ws_root)
         };
 
+        let all = q.all.unwrap_or(false);
         match fs::list_dir(&canonical, "", sort, desc).await {
-            Ok(entries) => (
-                StatusCode::OK,
-                Json(
-                    json!({ "files": entries, "cwd": fs::display_path(&canonical), "is_outside_workspace": is_outside, "workspace_root": effective_root }),
-                ),
-            ),
+            Ok(entries) => {
+                let (entries, total, truncated) = bounded_entries(entries, all);
+                (
+                    StatusCode::OK,
+                    Json(
+                        json!({ "files": entries, "cwd": fs::display_path(&canonical), "is_outside_workspace": is_outside, "workspace_root": effective_root, "total": total, "truncated": truncated }),
+                    ),
+                )
+            }
             Err(e) => {
                 error!("list_files (session) failed: {}", e);
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
@@ -471,13 +492,17 @@ async fn list_files(
             Err(_) => false,
         };
 
+        let all = q.all.unwrap_or(false);
         match fs::list_dir(&canonical, "", sort, desc).await {
-            Ok(entries) => (
-                StatusCode::OK,
-                Json(
-                    json!({ "files": entries, "cwd": fs::display_path(&canonical), "is_outside_workspace": is_outside, "workspace_root": root }),
-                ),
-            ),
+            Ok(entries) => {
+                let (entries, total, truncated) = bounded_entries(entries, all);
+                (
+                    StatusCode::OK,
+                    Json(
+                        json!({ "files": entries, "cwd": fs::display_path(&canonical), "is_outside_workspace": is_outside, "workspace_root": root, "total": total, "truncated": truncated }),
+                    ),
+                )
+            }
             Err(e) => {
                 error!("list_files (workspace) failed: {}", e);
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
@@ -494,11 +519,18 @@ async fn list_files(
         let base = std::path::Path::new(&root);
 
         if !base.exists() {
-            return (StatusCode::OK, Json(json!([])));
+            return (StatusCode::OK, Json(json!({ "files": [], "total": 0, "truncated": false })));
         }
 
+        let all = q.all.unwrap_or(false);
         match fs::list_dir(base, rel_path, sort, desc).await {
-            Ok(entries) => (StatusCode::OK, Json(json!(entries))),
+            Ok(entries) => {
+                let (entries, total, truncated) = bounded_entries(entries, all);
+                (
+                    StatusCode::OK,
+                    Json(json!({ "files": entries, "total": total, "truncated": truncated })),
+                )
+            }
             Err(e) => {
                 error!("list_files failed: {}", e);
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
@@ -1146,7 +1178,9 @@ async fn search_files(
     };
 
     match fs::search_files(&base, rel_path, &q.q).await {
-        Ok(entries) => (StatusCode::OK, Json(json!(entries))),
+        Ok(result) => {
+            (StatusCode::OK, Json(json!({ "files": result.files, "truncated": result.truncated })))
+        }
         Err(e) => {
             error!("search failed: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
@@ -1206,6 +1240,7 @@ mod handler_tests {
             order: None,
             allow_escape,
             inline: None,
+            all: None,
         }
     }
 
@@ -1219,6 +1254,7 @@ mod handler_tests {
             order: None,
             allow_escape: None,
             inline: Some(true),
+            all: None,
         }
     }
 
@@ -1233,12 +1269,51 @@ mod handler_tests {
             order: None,
             allow_escape,
             inline: None,
+            all: None,
         }
     }
 
     async fn body_json(res: Response) -> serde_json::Value {
         let bytes = to_bytes(res.into_body(), 1024 * 1024).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn file_entry(name: &str) -> fs::FileEntry {
+        fs::FileEntry {
+            path_type: fs::PathType::File,
+            name: name.to_string(),
+            mtime: 0,
+            size: Some(0),
+            rel_path: None,
+        }
+    }
+
+    #[test]
+    fn bounded_entries_truncates_at_limit_unless_all() {
+        let make = || {
+            (0..fs::MAX_LIST_ENTRIES + 3).map(|i| file_entry(&format!("f{i}"))).collect::<Vec<_>>()
+        };
+
+        let (entries, total, truncated) = bounded_entries(make(), false);
+        assert_eq!(entries.len(), fs::MAX_LIST_ENTRIES);
+        assert_eq!(total, fs::MAX_LIST_ENTRIES + 3);
+        assert!(truncated);
+
+        let (entries, total, truncated) = bounded_entries(make(), true);
+        assert_eq!(entries.len(), fs::MAX_LIST_ENTRIES + 3);
+        assert_eq!(total, fs::MAX_LIST_ENTRIES + 3);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn bounded_entries_does_not_truncate_at_exact_limit() {
+        let entries =
+            (0..fs::MAX_LIST_ENTRIES).map(|i| file_entry(&format!("f{i}"))).collect::<Vec<_>>();
+
+        let (entries, total, truncated) = bounded_entries(entries, false);
+        assert_eq!(entries.len(), fs::MAX_LIST_ENTRIES);
+        assert_eq!(total, fs::MAX_LIST_ENTRIES);
+        assert!(!truncated);
     }
 
     /// 测试用的连接信息：handler 现在带 `ConnectInfo`（审计 actor 取来源 IP），
@@ -1499,6 +1574,30 @@ mod handler_tests {
         let v = body_json(res).await;
         assert_eq!(v["workspace_root"].as_str(), Some(base.to_str().unwrap()));
         assert_eq!(v["is_outside_workspace"].as_bool(), Some(false));
+        assert_eq!(v["total"].as_u64(), Some(0));
+        assert_eq!(v["truncated"].as_bool(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn search_files_response_wraps_files_and_truncated() {
+        let state = test_state().await;
+        let (base, _outside) = fixture_session(&state).await;
+        std::fs::write(base.join("needle.txt"), b"x").unwrap();
+
+        let q = SearchQuery {
+            q: "needle".into(),
+            path: None,
+            workspace: None,
+            session: Some("test-session".into()),
+            workspace_id: None,
+        };
+        let res = search_files(State(state), Query(q)).await.into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let v = body_json(res).await;
+        assert_eq!(v["files"].as_array().unwrap().len(), 1);
+        assert_eq!(v["truncated"].as_bool(), Some(false));
+        assert_eq!(v["files"][0]["rel_path"].as_str(), Some("needle.txt"));
     }
 
     #[tokio::test]
@@ -1527,6 +1626,7 @@ mod handler_tests {
             order: None,
             allow_escape: None,
             inline: None,
+            all: None,
         };
         let res = list_files(State(state), Query(q)).await.into_response();
         assert_eq!(res.status(), StatusCode::OK);

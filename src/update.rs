@@ -344,23 +344,64 @@ fn asset_name() -> Result<&'static str> {
     }
 }
 
+/// 规范化并选取 GitHub token：空串/纯空白视为未设置，`GH_TOKEN` 优先。
+fn pick_github_token(gh: Option<String>, github: Option<String>) -> Option<String> {
+    let normalize =
+        |raw: Option<String>| raw.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    normalize(gh).or_else(|| normalize(github))
+}
+
+/// 每次请求现读 `GH_TOKEN` → `GITHUB_TOKEN`，只在本次请求使用、不落盘。
+fn github_token() -> Option<String> {
+    let [gh, github] = crate::GITHUB_TOKEN_ENV_VARS.map(|key| std::env::var(key).ok());
+    pick_github_token(gh, github)
+}
+
 pub(crate) async fn fetch_latest() -> Result<LatestRelease> {
     let client = reqwest::Client::builder().timeout(HTTP_TIMEOUT).build()?;
     let url = format!("https://api.github.com/repos/{}/releases/latest", repo_slug());
-    let resp = client
+    // token 缺失时保持匿名（60 次/时/IP）；有效 token 单独计额（5000 次/时）。
+    // 401/403/额度耗尽与网络错误同等对待——调用方按渠道降级，不因认证失败断链。
+    let token = github_token();
+    let mut request = client
         .get(&url)
         .header("User-Agent", USER_AGENT)
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-        .with_context(|| {
-            format!(
-                "failed to reach GitHub API. You can update manually: curl -fsSL https://raw.githubusercontent.com/{}/main/install.sh | bash",
-                repo_slug()
-            )
-        })?;
-    if resp.status() == reqwest::StatusCode::FORBIDDEN {
-        bail!("GitHub API rate limit reached. Try again later.");
+        .header("Accept", "application/vnd.github+json");
+    if let Some(token) = token.as_deref() {
+        request = request.bearer_auth(token);
+    }
+    let resp = request.send().await.with_context(|| {
+        format!(
+            "failed to reach GitHub API. You can update manually: curl -fsSL https://raw.githubusercontent.com/{}/main/install.sh | bash",
+            repo_slug()
+        )
+    })?;
+    match resp.status() {
+        reqwest::StatusCode::UNAUTHORIZED => bail!(
+            "GitHub API rejected the {}. Check that the token is valid and has not expired.",
+            if token.is_some() {
+                "configured token (401)"
+            } else {
+                "unauthenticated request (401)"
+            }
+        ),
+        reqwest::StatusCode::FORBIDDEN => {
+            // 403 既可能是额度耗尽，也可能是 token 权限不足；仅前者按限流报错，
+            // 两者都会由调用方走渠道降级。
+            let rate_limited = resp
+                .headers()
+                .get("x-ratelimit-remaining")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.trim() == "0");
+            if rate_limited {
+                bail!("GitHub API rate limit reached. Try again later.");
+            }
+            bail!("GitHub API access forbidden (403). If a token is configured, check its scopes.");
+        }
+        reqwest::StatusCode::TOO_MANY_REQUESTS => {
+            bail!("GitHub API rate limit reached. Try again later.");
+        }
+        _ => {}
     }
     let info: ReleaseInfo = resp
         .error_for_status()
@@ -539,6 +580,13 @@ fn npm_upgrade_args_with_registry(exe: &Path, registry: Option<&str>) -> Vec<Str
     args
 }
 
+/// token 只服务于本进程的更新探测，不进入 npm/cargo/校验子进程及其生命周期脚本。
+fn strip_github_token_env(cmd: &mut tokio::process::Command) {
+    for var in crate::GITHUB_TOKEN_ENV_VARS {
+        cmd.env_remove(var);
+    }
+}
+
 // CLI 专用：继承 stdio 直通用户终端，失败时透传子进程退出码（会终止本进程）。
 // 服务器进程内严禁使用，Web 端点请用 npm_upgrade。
 async fn delegate<S: AsRef<std::ffi::OsStr>>(
@@ -546,11 +594,10 @@ async fn delegate<S: AsRef<std::ffi::OsStr>>(
     cmd: &str,
     cmd_args: &[S],
 ) -> Result<()> {
-    let status = tokio::process::Command::new(program)
-        .args(cmd_args)
-        .status()
-        .await
-        .with_context(|| format!("failed to run {cmd}"))?;
+    let mut child = tokio::process::Command::new(program);
+    child.args(cmd_args);
+    strip_github_token_env(&mut child);
+    let status = child.status().await.with_context(|| format!("failed to run {cmd}"))?;
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
@@ -581,11 +628,10 @@ async fn run_captured<S: AsRef<std::ffi::OsStr>>(
     cmd: &str,
     cmd_args: &[S],
 ) -> Result<String> {
-    let output = tokio::process::Command::new(program)
-        .args(cmd_args)
-        .output()
-        .await
-        .with_context(|| format!("failed to run {cmd}"))?;
+    let mut child = tokio::process::Command::new(program);
+    child.args(cmd_args);
+    strip_github_token_env(&mut child);
+    let output = child.output().await.with_context(|| format!("failed to run {cmd}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let tail: String =
@@ -617,8 +663,10 @@ pub(crate) async fn verify_installed_version(exe: &Path, expected: &Version) -> 
             OFFICIAL_NPM_REGISTRY
         );
     }
-    let output = tokio::process::Command::new(&exe)
-        .arg("--version")
+    let mut verify = tokio::process::Command::new(&exe);
+    verify.arg("--version");
+    strip_github_token_env(&mut verify);
+    let output = verify
         .output()
         .await
         .with_context(|| format!("npm finished but failed to run {}", exe.display()))?;
@@ -716,8 +764,10 @@ async fn download_and_install(
     }
 
     // 替换前验证新 binary 可执行且版本正确（防架构错配/损坏下载）
-    let output = tokio::process::Command::new(tmp)
-        .arg("--version")
+    let mut verify = tokio::process::Command::new(tmp);
+    verify.arg("--version");
+    strip_github_token_env(&mut verify);
+    let output = verify
         .output()
         .await
         .context("downloaded binary failed to execute (wrong architecture?)")?;
@@ -921,6 +971,21 @@ mod tests {
     fn parse_version_output_rejects_unparseable() {
         assert_eq!(parse_version_output(""), None);
         assert_eq!(parse_version_output("omniterm unknown"), None);
+    }
+
+    #[test]
+    fn github_token_prefers_gh_and_trims() {
+        assert_eq!(crate::GITHUB_TOKEN_ENV_VARS, ["GH_TOKEN", "GITHUB_TOKEN"]);
+        assert_eq!(
+            pick_github_token(Some("  gh-token  ".into()), Some("github-token".into())),
+            Some("gh-token".to_string())
+        );
+        assert_eq!(
+            pick_github_token(Some("   ".into()), Some("github-token".into())),
+            Some("github-token".to_string())
+        );
+        assert_eq!(pick_github_token(Some("".into()), Some("".into())), None);
+        assert_eq!(pick_github_token(None, None), None);
     }
 
     #[test]

@@ -122,6 +122,17 @@ export interface DuplicateGroup {
 // Minimal file entry shape returned by /files and /system/dirs.
 // Kept here (not in a component file) so both FileManager and
 // the new-project modal can use the same type without coupling.
+export interface FileListResponse {
+  files: FileEntry[]
+  cwd?: string
+  is_outside_workspace?: boolean
+  workspace_root?: string
+  /** 截断前的真实条目数；旧服务端可能缺省 */
+  total?: number
+  /** 是否因 MAX_LIST_ENTRIES 被截断；旧服务端可能缺省 */
+  truncated?: boolean
+}
+
 export interface FileEntry {
   path_type: 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
   name: string
@@ -129,6 +140,12 @@ export interface FileEntry {
   size: number | null
   /** 相对搜索根的路径，仅 /files/search 返回。 */
   rel_path?: string
+}
+
+export interface SearchResponse {
+  files: FileEntry[]
+  /** 是否触达结果数或扫描预算上限（结果是部分集） */
+  truncated?: boolean
 }
 
 export interface Workspace {
@@ -322,7 +339,10 @@ export const api = {
   multiplexerStatus: () =>
     request<{ available: boolean; error?: string; install_hints?: string }>('/system/multiplexer', { silent: true }),
   listDirs: (path: string) =>
-    request<{ files: FileEntry[] }>(`/system/dirs?path=${encodeURIComponent(path)}`, { silent: true }),
+    request<{ files: FileEntry[]; total?: number; truncated?: boolean }>(
+      `/system/dirs?path=${encodeURIComponent(path)}`,
+      { silent: true },
+    ),
   pathExists: (path: string) =>
     request<{ exists: boolean }>(`/system/exists?path=${encodeURIComponent(path)}`),
   /** 在运行 OmniTerm 的本机调起系统目录选择器；远程访问会被后端 403
@@ -609,7 +629,7 @@ export const api = {
     let url = `/files?workspace=${workspace}&path=${path || ''}`
     if (sort) url += `&sort=${sort}`
     if (desc) url += `&order=desc`
-    return request<FileEntry[]>(url)
+    return request<FileListResponse>(url)
   },
   deleteFile: (workspace: string, path: string) =>
     request(`/files?workspace=${workspace}&path=${encodeURIComponent(path)}`, {
@@ -646,14 +666,14 @@ export const api = {
   copyFiles: (workspace: string, paths: string[], destination: string) =>
     request('/files/copy', { method: 'POST', body: JSON.stringify({ paths, destination, workspace }) }),
   searchFiles: (workspace: string, query: string, path?: string) =>
-    request<FileEntry[]>(`/files/search?workspace=${workspace}&q=${encodeURIComponent(query)}&path=${path || ''}`),
+    request<SearchResponse>(`/files/search?workspace=${workspace}&q=${encodeURIComponent(query)}&path=${path || ''}`),
 
   // Files by session (follows terminal CWD)
   listFilesBySession: (sessionId: string, path?: string, sort?: string, desc?: boolean) => {
     let url = `/files?session=${sessionId}&path=${path || ''}`
     if (sort) url += `&sort=${sort}`
     if (desc) url += `&order=desc`
-    return request<{ files: FileEntry[]; cwd: string; is_outside_workspace: boolean }>(url)
+    return request<FileListResponse>(url)
   },
   uploadFileBySession: (sessionId: string, path: string, file: File) => {
     const form = new FormData()
@@ -675,7 +695,7 @@ export const api = {
   renameBySession: (sessionId: string, path: string, newName: string) =>
     request('/files/rename', { method: 'POST', body: JSON.stringify({ path, newName, session: sessionId }) }),
   searchFilesBySession: (sessionId: string, query: string, path?: string) =>
-    request<FileEntry[]>(`/files/search?session=${sessionId}&q=${encodeURIComponent(query)}&path=${path || ''}`),
+    request<SearchResponse>(`/files/search?session=${sessionId}&q=${encodeURIComponent(query)}&path=${path || ''}`),
   readFileBySession: (sessionId: string, path: string) =>
     request<{ content: string }>(`/files/read?session=${sessionId}&path=${encodeURIComponent(path)}`),
   writeFileBySession: (sessionId: string, path: string, content: string) =>
@@ -685,14 +705,15 @@ export const api = {
     }),
 
   // Generic file methods — support session or workspaceId (choose one)
-  listFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; path?: string; sort?: string; desc?: boolean }) => {
+  listFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; path?: string; sort?: string; desc?: boolean; all?: boolean }) => {
     let url = `/files?path=${params.path || ''}`
     if (params.session) url += `&session=${params.session}`
     if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
     if (params.projectId) url += `&workspace=${params.projectId}`
     if (params.sort) url += `&sort=${params.sort}`
     if (params.desc) url += `&order=desc`
-    return request<{ files: FileEntry[]; cwd: string; is_outside_workspace: boolean; workspace_root?: string }>(url)
+    if (params.all) url += `&all=true`
+    return request<FileListResponse>(url)
   },
   deleteFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; allowEscape?: boolean }) => {
     let url = `/files?path=${encodeURIComponent(params.path)}`
@@ -808,25 +829,66 @@ export const api = {
     if (params.session) url += `&session=${params.session}`
     if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
     if (params.projectId) url += `&workspace=${params.projectId}`
-    return request<FileEntry[]>(url)
+    return request<SearchResponse>(url)
   },
 
   // ── Git panel (docs/dev/plans/archive/2026-07-26-git-panel.md ADR-2: repo bound
   //    to session/workspace id only; the backend resolves the repo root) ──
   gitStatus: (bind: GitBind) =>
     request<GitStatus>(`/git/status?${gitBindQuery(bind)}`, { silent: true }),
-  gitDiff: (bind: GitBind, params: { path: string; staged?: boolean; untracked?: boolean }) => {
+  gitDiff: (bind: GitBind, params: { path: string; staged?: boolean; untracked?: boolean; context_lines?: number }) => {
     let url = `/git/diff?${gitBindQuery(bind)}&path=${encodeURIComponent(params.path)}`
     if (params.staged) url += '&staged=true'
     if (params.untracked) url += '&untracked=true'
+    if (params.context_lines != null) url += `&context_lines=${params.context_lines}`
     return request<{ diff: string; truncated: boolean; root: string }>(url)
   },
-  gitLog: (bind: GitBind, params: { skip?: number; limit?: number }) =>
-    request<{ entries: GitLogEntry[]; has_more: boolean } | { is_repo: false }>(
-      `/git/log?${gitBindQuery(bind)}&skip=${params.skip ?? 0}&limit=${params.limit ?? 50}`,
-    ),
+  gitHunks: (bind: GitBind, params: { path: string; staged?: boolean; context_lines?: number }) => {
+    let url = `/git/hunks?${gitBindQuery(bind)}&path=${encodeURIComponent(params.path)}`
+    if (params.staged) url += '&staged=true'
+    if (params.context_lines != null) url += `&context_lines=${params.context_lines}`
+    return request<GitHunksResponse>(url)
+  },
+  gitHunk: (bind: GitBind, params: {
+    path: string
+    action: GitHunkAction
+    patch: string
+    context_lines: number
+  }) =>
+    request('/git/hunk', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...gitBindBody(bind),
+        path: params.path,
+        action: params.action,
+        patch: params.patch,
+        context_lines: params.context_lines,
+      }),
+      silent: true,
+    }),
+  gitLog: (bind: GitBind, params: {
+    skip?: number
+    limit?: number
+    /** Only commits touching this repo-relative path. */
+    path?: string
+    /** Include commits from every ref (`git log --all`). */
+    all?: boolean
+  }) => {
+    let url = `/git/log?${gitBindQuery(bind)}&skip=${params.skip ?? 0}&limit=${params.limit ?? 50}`
+    if (params.path) url += `&path=${encodeURIComponent(params.path)}`
+    if (params.all) url += '&all=true'
+    return request<{ entries: GitLogEntry[]; has_more: boolean } | { is_repo: false }>(url)
+  },
   gitShow: (bind: GitBind, sha: string) =>
     request<GitCommitDetail>(`/git/show?${gitBindQuery(bind)}&sha=${encodeURIComponent(sha)}`),
+  gitRangeFiles: (bind: GitBind, base: string) =>
+    request<GitRangeOverview>(
+      `/git/range?${gitBindQuery(bind)}&base=${encodeURIComponent(base)}`,
+    ),
+  gitRangeDiff: (bind: GitBind, base: string, path: string) =>
+    request<{ diff: string; truncated: boolean; root: string }>(
+      `/git/range?${gitBindQuery(bind)}&base=${encodeURIComponent(base)}&path=${encodeURIComponent(path)}`,
+    ),
   gitBranches: (bind: GitBind) =>
     request<{ branches: GitBranch[] } | { is_repo: false }>(`/git/branches?${gitBindQuery(bind)}`),
   gitStage: (bind: GitBind, paths: string[]) =>
@@ -859,6 +921,22 @@ export const api = {
     request('/git/revert-commit', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), sha }), silent: true }),
   gitReset: (bind: GitBind, sha: string, mode: 'soft' | 'mixed') =>
     request('/git/reset', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), sha, mode }), silent: true }),
+  gitMerge: (bind: GitBind, branch: string) =>
+    request('/git/merge', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), branch }), silent: true }),
+  gitRebase: (bind: GitBind, branch: string) =>
+    request('/git/rebase', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), branch }), silent: true }),
+  gitOperationContinue: (bind: GitBind) =>
+    request('/git/operation/continue', {
+      method: 'POST',
+      body: JSON.stringify(gitBindBody(bind)),
+      silent: true,
+    }),
+  gitOperationAbort: (bind: GitBind) =>
+    request('/git/operation/abort', {
+      method: 'POST',
+      body: JSON.stringify(gitBindBody(bind)),
+      silent: true,
+    }),
   gitGenerateCommitMessage: (bind: GitBind) =>
     request<AiCommitGeneratedMessage>('/git/commit-message', {
       method: 'POST',
@@ -914,6 +992,15 @@ export interface GitStatusEntry {
   conflicted: boolean
 }
 
+export type GitOperationKind = 'merge' | 'rebase' | 'cherry_pick' | 'revert' | 'am'
+
+/** Paused merge/rebase/cherry-pick/revert/am detected on disk (plan D5). */
+export interface GitInProgress {
+  kind: GitOperationKind
+  /** Unmerged entries currently in the index. */
+  conflicted: number
+}
+
 export interface GitStatus {
   is_repo: boolean
   repo_root?: string
@@ -923,6 +1010,7 @@ export interface GitStatus {
   ahead?: number
   behind?: number
   entries?: GitStatusEntry[]
+  in_progress?: GitInProgress | null
 }
 
 export interface GitLogEntry {
@@ -942,6 +1030,10 @@ export interface GitCommitDetail {
   message: string
   diff: string
   truncated: boolean
+  /** Files touched by the commit (`git show --name-status`). */
+  files: GitChangedFile[]
+  /** True when the file list hit the server-side cap. */
+  files_truncated: boolean
 }
 
 export interface GitBranch {
@@ -955,6 +1047,43 @@ export interface GitStashEntry {
   index: number
   date: string
   message: string
+}
+
+export type GitHunkAction = 'stage' | 'unstage' | 'revert'
+
+/** One apply-able hunk. `patch` is an opaque token echoed back to `/git/hunk`. */
+export interface GitHunk {
+  /** The `@@ ... @@` line, matched against the display parser before use. */
+  header: string
+  patch: string
+}
+
+export interface GitHunksResponse {
+  diff: string
+  truncated: boolean
+  hunks: GitHunk[]
+  /** Effective context-line count used to build `hunks` (server-clamped). */
+  context_lines: number
+  root: string
+}
+
+/** One changed file from `--name-status` (branch comparison or commit). */
+export interface GitChangedFile {
+  path: string
+  /** Rename/copy source when `status` is `R`/`C`. */
+  orig_path?: string
+  /** Single status letter: A/M/D/R/C/T/U. */
+  status: string
+}
+
+export interface GitRangeOverview {
+  merge_base: string
+  files: GitChangedFile[]
+  /** True when the file list hit the server-side cap. */
+  files_truncated: boolean
+  diff: string
+  truncated: boolean
+  root: string
 }
 
 // ── AI commit message settings ──

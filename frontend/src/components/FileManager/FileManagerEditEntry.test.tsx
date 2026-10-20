@@ -176,4 +176,12 @@ describe('FileManager 行内编辑入口 → 抽屉打开模式（接线回归�
     // 目录只有 copy/rename/delete
     expect(icons.length).toBe(3)
   })
+
+  it('目录大小列不显示条目数（size 已改为懒统计）', async () => {
+    await mountFileManager(root)
+    const row = Array.from(document.body.querySelectorAll('.fm-table tbody tr')).find((tr) =>
+      tr.textContent?.includes('src'),
+    ) as HTMLElement
+    expect(row.querySelector('.fm-td-size')?.textContent).toBe('-')
+  })
 })

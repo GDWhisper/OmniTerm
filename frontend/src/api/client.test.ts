@@ -174,3 +174,105 @@ describe('api.getAuditLog (安全审计日志读口)', () => {
     vi.resetModules()
   })
 })
+
+describe('git hunk endpoints', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('gitHunks encodes the path and forwards staged/context_lines', async () => {
+    const calls = mockFetch()
+
+    await api.gitHunks(
+      { workspaceId: 'w1' },
+      { path: 'src/a b.ts', staged: true, context_lines: 10 },
+    )
+    expect(lastUrl(calls)).toBe(
+      '/api/v1/git/hunks?workspace_id=w1&path=src%2Fa%20b.ts&staged=true&context_lines=10',
+    )
+  })
+
+  it('gitHunk posts the opaque patch with the bind fields', async () => {
+    const calls = mockFetch()
+    const patch = '@@ -1 +1 @@\n-a\n+b\n'
+
+    await api.gitHunk(
+      { session: 's1' },
+      { path: 'a.txt', action: 'stage', patch, context_lines: 3 },
+    )
+    expect(lastUrl(calls)).toBe('/api/v1/git/hunk')
+    const init = calls[0][1]
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(String(init?.body))).toEqual({
+      session: 's1',
+      path: 'a.txt',
+      action: 'stage',
+      patch,
+      context_lines: 3,
+    })
+  })
+})
+
+describe('git range and operation endpoints', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('gitRangeFiles encodes the base ref', async () => {
+    const calls = mockFetch()
+    await api.gitRangeFiles({ workspaceId: 'w1' }, 'feature/x')
+    expect(lastUrl(calls)).toBe(
+      '/api/v1/git/range?workspace_id=w1&base=feature%2Fx',
+    )
+  })
+
+  it('gitRangeDiff encodes both base and path', async () => {
+    const calls = mockFetch()
+    await api.gitRangeDiff({ session: 's1' }, 'main', 'src/a b.ts')
+    expect(lastUrl(calls)).toBe(
+      '/api/v1/git/range?session=s1&base=main&path=src%2Fa%20b.ts',
+    )
+  })
+
+  it('gitMerge and gitRebase post the branch with bind fields', async () => {
+    const calls = mockFetch()
+    await api.gitMerge({ session: 's1' }, 'feature')
+    await api.gitRebase({ session: 's1' }, 'main')
+    expect(calls.map(([url]) => url)).toEqual([
+      '/api/v1/git/merge',
+      '/api/v1/git/rebase',
+    ])
+    expect(JSON.parse(String(calls[0][1]?.body))).toEqual({
+      session: 's1',
+      branch: 'feature',
+    })
+    expect(JSON.parse(String(calls[1][1]?.body))).toEqual({
+      session: 's1',
+      branch: 'main',
+    })
+    expect(calls.every(([, init]) => init?.method === 'POST')).toBe(true)
+  })
+
+  it('gitLog forwards file and all-branch filters', async () => {
+    const calls = mockFetch()
+    await api.gitLog(
+      { session: 's1' },
+      { skip: 10, limit: 25, path: 'src/a b.ts', all: true },
+    )
+    expect(lastUrl(calls)).toBe(
+      '/api/v1/git/log?session=s1&skip=10&limit=25&path=src%2Fa%20b.ts&all=true',
+    )
+  })
+
+  it('operation continue and abort post only the bind fields', async () => {
+    const calls = mockFetch()
+    await api.gitOperationContinue({ workspaceId: 'w1' })
+    await api.gitOperationAbort({ workspaceId: 'w1' })
+    expect(calls.map(([url]) => url)).toEqual([
+      '/api/v1/git/operation/continue',
+      '/api/v1/git/operation/abort',
+    ])
+    expect(JSON.parse(String(calls[0][1]?.body))).toEqual({ workspace_id: 'w1' })
+    expect(JSON.parse(String(calls[1][1]?.body))).toEqual({ workspace_id: 'w1' })
+  })
+})

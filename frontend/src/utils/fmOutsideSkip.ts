@@ -7,8 +7,8 @@
  *
  * 说明：
  * - 仅当 workspaceRoot 存在（session/workspace 模式由 listFiles2 返回
- *   `workspace_root`）时才参与判断；project 模式返回裸数组、无
- *   workspace_root（undefined），此时 isOutsideSkipped 恒为 false（安全默认）。
+ *   `workspace_root`）时才参与判断；project 模式无 workspace_root
+ *   （undefined），此时 isOutsideSkipped 恒为 false（安全默认）。
  * - localStorage 在隐私模式/配额用尽等场景可能抛异常，所有读写均 try/catch
  *   包裹，失败时静默降级为「不跳过、每次提醒」。
  */

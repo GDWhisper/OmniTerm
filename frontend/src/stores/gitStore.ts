@@ -18,8 +18,9 @@ interface GitState {
 
   fetchStatus: (bind: GitBind) => Promise<void>
   fetchBranches: (bind: GitBind) => Promise<void>
-  /** Run a git mutation serially; refreshes status afterwards. Throws on error. */
-  mutate: (bind: GitBind, op: () => Promise<unknown>) => Promise<void>
+  /** Run a git mutation serially; refreshes status afterwards. Throws on error.
+   *  Returns false without running `op` when another mutation is in flight. */
+  mutate: (bind: GitBind, op: () => Promise<unknown>) => Promise<boolean>
   notifyExternalChange: () => void
   reset: () => void
 }
@@ -54,12 +55,18 @@ export const useGitStore = create<GitState>((set, get) => ({
   },
 
   mutate: async (bind, op) => {
-    if (get().mutating) return
+    // Refuse rather than queue: callers must not report success for an op
+    // that never ran (double-click / fast hunk actions).
+    if (get().mutating) return false
     set({ mutating: true })
     try {
       await op()
-      await get().fetchStatus(bind)
+      return true
     } finally {
+      // A failed mutation can still change repo state (merge/rebase/cherry-pick
+      // conflicts leave an in-progress operation), so status converges on both
+      // paths before the busy flag is released.
+      await get().fetchStatus(bind)
       set({ mutating: false })
     }
   },

@@ -45,6 +45,9 @@ export function RepairPathDialog(props: {
     entries: repairBrowseEntries,
     loading: repairBrowseLoading,
     error: repairBrowseError,
+    truncated: repairBrowseTruncated,
+    total: repairBrowseTotal,
+    shown: repairBrowseShown,
     loadDirs,
     reset,
   } = useDirBrowser()
@@ -300,6 +303,14 @@ export function RepairPathDialog(props: {
                   <span className="truncate">{entry.name}</span>
                 </div>
               ))}
+              {!repairBrowseLoading && !repairBrowseError && repairBrowseTruncated && (
+                <div className="dir-browser-truncated">
+                  {t('sidebar.dirListTruncated', {
+                    shown: repairBrowseShown,
+                    total: repairBrowseTotal,
+                  })}
+                </div>
+              )}
             </div>
           </div>
 

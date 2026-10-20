@@ -933,16 +933,10 @@ body.fm-dragging * {
   padding-left: 26px;
 }
 
-/* ── Table rows ── */
-.fm-row {
-  transition: background 0.15s ease;
-}
-
-.fm-row:hover {
-  background: var(--accent-10);
-}
-
-.fm-table tr:hover td {
+/* ── Table rows ──
+   行高 = 24px 动作图标（preflight 已清掉 td 默认 padding）；虚拟滚动常量
+   FM_ROW_HEIGHT（fileListWindow.ts）与此同步，改任一处须同步另一处。 */
+.fm-table tr:not(.fm-spacer-row):hover td {
   background: var(--accent-10);
 }
 
@@ -950,12 +944,56 @@ body.fm-dragging * {
   background: var(--accent-14) !important;
 }
 
-.fm-row td {
-  white-space: nowrap;
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--bg-elevated);
+/* 目录浏览弹窗的截断提示（服务端过滤目录后套 MAX_LIST_ENTRIES） */
+.dir-browser-truncated {
+  padding: 4px 10px;
+  color: var(--text-muted);
+  font-family: var(--reader-font);
+  font-size: 11px;
+}
+
+/* 列表提示条（截断 / 搜索结果）：默认只显示部分内容时的状态说明 */
+.fm-truncated-bar,
+.fm-search-results-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-family: var(--reader-font);
+  font-size: 11px;
+}
+.fm-search-results-bar > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fm-truncated-action,
+.fm-search-clear {
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+.fm-truncated-action:hover,
+.fm-search-clear:hover {
+  color: var(--text-primary);
+}
+
+/* 虚拟滚动 spacer 行：只负责撑起未渲染区间的高度，不参与边框/内边距 */
+.fm-table tr.fm-spacer-row td {
+  padding: 0;
+  border: 0;
+  line-height: 0;
 }
 
 /* Actions cell — flex centers the row action icons (copy / edit / rename / delete; edit 与超阈值退让图标按行二选一) */
@@ -1001,6 +1039,17 @@ body.fm-dragging * {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+/* 搜索结果的父目录（相对搜索根）：与文件名同行，弱化显示以区分同名文件 */
+.fm-search-relpath {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-size: 10px;
 }
 
 /* ── Time cell ── */
@@ -2985,9 +3034,13 @@ select optgroup option {
   cursor: pointer;
   transition: all 0.1s ease;
 }
-.git-branch-item:hover {
+.git-branch-item:hover:not(:disabled) {
   background: var(--accent-10);
   color: var(--accent);
+}
+.git-branch-item:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 .git-branch-item.active {
   color: var(--gold-light, #FFCB6B);
@@ -3066,6 +3119,11 @@ select optgroup option {
   opacity: 0.5;
   cursor: default;
 }
+.git-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-10);
+}
 
 .git-ab-badge {
   font-family: var(--reader-font);
@@ -3073,6 +3131,147 @@ select optgroup option {
   color: var(--gold-light, #FFCB6B);
   padding: 0 3px;
   flex-shrink: 0;
+}
+
+/* ── Paused merge/rebase banner (plan D5): persistent until resolved ── */
+.git-op-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 5px 10px;
+  background: var(--warning-12);
+  border-bottom: 2px solid var(--warning);
+  flex-shrink: 0;
+  font-family: var(--reader-font);
+  font-size: 12px;
+}
+.git-op-banner-title {
+  color: var(--warning);
+  font-family: var(--pixel-font);
+  font-size: 12px;
+  letter-spacing: var(--pixel-tracking-sm);
+  white-space: nowrap;
+}
+.git-op-banner-conflict {
+  color: var(--danger);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.git-op-banner-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+  min-width: 0;
+}
+
+.git-btn-danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.git-btn-danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-12);
+}
+
+/* BASE selector for the read-only branch comparison view. */
+.git-rangebar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.git-rangebar-label {
+  color: var(--text-faint);
+  font-family: var(--pixel-font);
+  font-size: 10px;
+  letter-spacing: var(--pixel-tracking-sm);
+  flex-shrink: 0;
+}
+.git-range-select {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 4px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  color: var(--text-muted);
+  font-family: var(--reader-font);
+  font-size: 11px;
+  cursor: pointer;
+}
+.git-range-select:focus {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+.git-range-select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.git-range-note {
+  padding: 4px 10px;
+  color: var(--text-faint);
+  font-family: var(--reader-font);
+  font-size: 11px;
+}
+
+/* ── HISTORY filters: all branches + single-file scope ── */
+.git-log-filterbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.git-log-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 180px;
+  padding: 2px 4px 2px 6px;
+  background: var(--accent-10);
+  border: 1px solid var(--accent-14);
+  color: var(--accent);
+  font-family: var(--reader-font);
+  font-size: 11px;
+}
+.git-log-filter-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-log-filter-chip .git-row-btn {
+  flex-shrink: 0;
+}
+
+/* ── Commit detail file list ── */
+.git-commit-files {
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 4px;
+}
+.git-commit-files-header {
+  padding: 6px 12px 4px;
+  color: var(--text-faint);
+  font-family: var(--pixel-font);
+  font-size: 11px;
+  letter-spacing: var(--pixel-tracking-sm);
+  text-transform: uppercase;
+}
+.git-commit-file-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 12px;
+  font-family: var(--reader-font);
+  font-size: 12px;
 }
 
 .git-viewbar {
@@ -3208,6 +3407,14 @@ select optgroup option {
 .git-row-btn:disabled {
   opacity: 0.4;
   cursor: default;
+}
+/* Compact context toggle in the diff drawer header (overrides the 18px square). */
+.git-ctx-btn {
+  width: auto;
+  padding: 0 6px;
+  font-family: var(--reader-font);
+  font-size: 10px;
+  letter-spacing: 0.02em;
 }
 
 /* ── Stash panel ── */
@@ -3592,6 +3799,24 @@ select optgroup option {
 .git-diff-line-meta .git-diff-text {
   color: var(--accent);
   opacity: 0.8;
+}
+.git-diff-hunk-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding-left: 6px;
+  opacity: 0.55;
+  transition: opacity 0.1s ease;
+}
+.git-diff-line-hunk:hover .git-diff-hunk-actions,
+.git-diff-hunk-actions:focus-within {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  .git-diff-hunk-actions {
+    opacity: 1;
+  }
 }
 .git-diff-truncated {
   padding: 10px 12px;

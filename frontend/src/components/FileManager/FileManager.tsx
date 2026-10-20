@@ -1,6 +1,6 @@
 import { getParentPath, joinPath, findCoveringProject, findExactProject } from '../../utils/path'
 import { getInitialDrawerHeight } from '../../utils/drawer'
-import { useState, useEffect, useRef, useCallback, useMemo, type KeyboardEvent, type DragEvent } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, type KeyboardEvent, type DragEvent, type UIEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type Session } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
@@ -20,6 +20,8 @@ import { FM_COL, FM_COL_CHECKBOX, fitFileTableColumns, type FileTableColWidths }
 import { triggerBump } from '../../utils/pixelAnimations'
 import { FolderSprite, FileSprite, FileCodeSprite } from '../PixelUI/PixelSprites'
 import { useFileDrag } from './useFileDrag'
+import { computeFileListWindow, FM_ROW_HEIGHT } from './fileListWindow'
+import { sortFileEntries } from './fileListSort'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
 
@@ -28,6 +30,8 @@ interface FileEntry {
   name: string
   mtime: number
   size: number | null
+  /** 相对搜索根的路径，仅搜索结果返回 */
+  rel_path?: string
 }
 
 type SortKey = 'name' | 'mtime' | 'size'
@@ -60,7 +64,7 @@ function formatTime(ms: number): string {
 function filesEqual(a: FileEntry[], b: FileEntry[]): boolean {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) {
-    if (a[i].name !== b[i].name || a[i].mtime !== b[i].mtime || a[i].size !== b[i].size || a[i].path_type !== b[i].path_type) return false
+    if (a[i].name !== b[i].name || a[i].mtime !== b[i].mtime || a[i].size !== b[i].size || a[i].path_type !== b[i].path_type || a[i].rel_path !== b[i].rel_path) return false
   }
   return true
 }
@@ -133,6 +137,16 @@ export function FileManager() {
 
   const [files, setFiles] = useState<FileEntry[]>([])
   const [cwd, setCwd] = useState('')  // absolute path from server
+  // 虚拟滚动窗口状态：真实滚动元素是内层 .fm-table-scroll（外层 wrap 不滚动）
+  const fileListScrollRef = useRef<HTMLDivElement | null>(null)
+  const [fileListScrollTop, setFileListScrollTop] = useState(0)
+  const [fileListViewportH, setFileListViewportH] = useState(() =>
+    typeof window === 'undefined' ? 0 : window.innerHeight,
+  )
+  // 列表截断状态：后端默认只返回前 MAX_LIST_ENTRIES 条；「加载全部」是显式出口
+  const [fileListTruncated, setFileListTruncated] = useState(false)
+  const [fileListTotal, setFileListTotal] = useState(0)
+  const showAllFilesRef = useRef(false)
   const [isOutsideWorkspace, setIsOutsideWorkspace] = useState(false)
   // workspace 边界根路径（listFiles2 返回的 workspace_root）；project 模式为 undefined
   const [workspaceRoot, setWorkspaceRoot] = useState<string | undefined>(undefined)
@@ -144,7 +158,7 @@ export function FileManager() {
   const [deleteDialog, setDeleteDialog] = useState<{ count: number; run: () => void } | null>(null)
 
   // Per-session file list cache for instant display on session switch
-  const fileCache = useRef<Map<string, { files: FileEntry[]; cwd: string; isOutsideWorkspace: boolean; workspaceRoot?: string }>>(new Map())
+  const fileCache = useRef<Map<string, { files: FileEntry[]; cwd: string; isOutsideWorkspace: boolean; workspaceRoot?: string; truncated: boolean; total: number }>>(new Map())
   const [loading, setLoading] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDesc, setSortDesc] = useState(false)
@@ -153,6 +167,11 @@ export function FileManager() {
   const [editValue, setEditValue] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
+  // 已生效的搜索（结果横幅/本地排序/SSE 抑制都以此为准）；输入框内容可与之不同
+  const [activeSearchQuery, setActiveSearchQuery] = useState('')
+  const [searchTruncated, setSearchTruncated] = useState(false)
+  const activeSearchQueryRef = useRef('')
+  activeSearchQueryRef.current = activeSearchQuery
   const searchRef = useRef<HTMLInputElement>(null)
   const searchWrapRef = useRef<HTMLDivElement>(null)
   // Download mode: button toggles a selection mode; checkboxes are inactive until activated
@@ -186,9 +205,26 @@ export function FileManager() {
   }, [activeSessionId, activeWorkspaceId])
   const sourceKey = useMemo(() => fmSource ? `${fmSource.type}:${fmSource.id}` : null, [fmSource])
 
-  const fetchFiles = useCallback(async (path?: string, sort?: string, desc?: boolean, silent = false): Promise<string | undefined> => {
-    if (!fmSource) { setFiles([]); return undefined }
-    if (!silent) setLoading(true)
+  // 搜索结果的 rel_path 相对 cwd；目录列表没有 rel_path，直接用 name
+  const entryPath = (entry: FileEntry) => joinPath(cwd, entry.rel_path ?? entry.name)
+
+  const fetchFiles = useCallback(async (path?: string, sort?: string, desc?: boolean, silent = false, all?: boolean): Promise<string | undefined> => {
+    if (!fmSource) {
+      setFiles([])
+      setFileListTruncated(false)
+      setFileListTotal(0)
+      return undefined
+    }
+    if (!silent) {
+      setLoading(true)
+      // 非静默刷新会卸载再重挂表格；滚动容器回到 0，窗口状态必须同步归零
+      setFileListScrollTop(0)
+      // 目录列表重新加载 = 退出搜索态（导航/刷新/写操作后都走这里）
+      setActiveSearchQuery('')
+      setSearchTruncated(false)
+      setSearchOpen(false)
+      setSearchQuery('')
+    }
     try {
       // Workspace mode has no session-keyed manualPath: fall back to current
       // cwd so parameterless refreshes (create/upload/rename) keep the path.
@@ -204,21 +240,30 @@ export function FileManager() {
         path: effectivePath,
         sort: sort ?? sortKeyRef.current,
         desc: desc ?? sortDescRef.current,
+        all: all ?? showAllFilesRef.current,
       })
       const newFiles = data.files ?? []
+      const truncated = data.truncated ?? false
+      const total = data.total ?? newFiles.length
       setFiles((prev) => filesEqual(prev, newFiles) ? prev : newFiles)
+      setFileListTruncated(truncated)
+      setFileListTotal(total)
       if (data.cwd) setCwd(data.cwd)
       setIsOutsideWorkspace(data.is_outside_workspace ?? false)
       // project 模式无 workspace_root（undefined）→ 重置为 undefined，此时总是弹确认（安全默认）
       setWorkspaceRoot(data.workspace_root)
       if (data.cwd) {
-        fileCache.current.set(sourceKey!, { files: newFiles, cwd: data.cwd, isOutsideWorkspace: data.is_outside_workspace ?? false, workspaceRoot: data.workspace_root })
+        fileCache.current.set(sourceKey!, { files: newFiles, cwd: data.cwd, isOutsideWorkspace: data.is_outside_workspace ?? false, workspaceRoot: data.workspace_root, truncated, total })
       }
       if (!silent) setSelected(new Set())
       return data.cwd
     } catch (err: unknown) {
       if (!silent) addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.loadFailed'))
-      if (!silent) setFiles([])
+      if (!silent) {
+        setFiles([])
+        setFileListTruncated(false)
+        setFileListTotal(0)
+      }
       return undefined
     } finally {
       if (!silent) setLoading(false)
@@ -365,6 +410,7 @@ export function FileManager() {
   } = useFileDrag({
     cwd, selected, fmSource, activeProjectId,
     onMoveComplete: () => fetchFiles(),
+    scrollRef: fileListScrollRef,
   })
 
   // 列宽随容器自适应（name/mtime/size 三列统一分配，算式见 fileTableLayout.ts）；
@@ -390,7 +436,8 @@ export function FileManager() {
   // SSE-driven refresh: debounce 防抖，把窗口内多次事件收敛为一次全量刷新
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    if (!fileChangeEvent || !activeSessionId) return
+    // 搜索结果是一份快照；SSE 事件不应把它悄悄替换成目录列表
+    if (!fileChangeEvent || !activeSessionId || activeSearchQueryRef.current) return
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
     refreshTimerRef.current = setTimeout(() => {
       refreshTimerRef.current = null
@@ -404,6 +451,32 @@ export function FileManager() {
     }
   }, [fileChangeEvent, activeSessionId])
 
+  // 虚拟滚动：测量真实滚动容器高度（面板隐藏/恢复时 ResizeObserver 也会补测）
+  const hasFiles = files.length > 0
+  useEffect(() => {
+    const el = fileListScrollRef.current
+    if (!el) return
+    const measure = () => setFileListViewportH(el.clientHeight)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [hasFiles, loading])
+
+  // 目录导航回到顶部；SSE 刷新同一目录不重置
+  useEffect(() => {
+    setFileListScrollTop(0)
+    if (fileListScrollRef.current) fileListScrollRef.current.scrollTop = 0
+  }, [cwd])
+
+  const handleFileListScroll = (e: UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget
+    setFileListViewportH(el.clientHeight)
+    // 量化到行边界：逐像素滚动不触发重渲染，跨行才更新窗口
+    const next = Math.floor(el.scrollTop / FM_ROW_HEIGHT) * FM_ROW_HEIGHT
+    setFileListScrollTop((prev) => (prev === next ? prev : next))
+  }
+
   // 拖拽松手才落盘：逐帧写 sessionStorage 会在一次拖拽里写上百次
   const commitDrawerHeight = useCallback((h: number) => {
     sessionStorage.setItem('omniterm_drawer_height', String(h))
@@ -414,7 +487,17 @@ export function FileManager() {
   // that redundantly overlapped on session switch, causing duplicate requests.
   const prevSourceTypeRef = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (!fmSource) { setFiles([]); setCwd(''); return }
+    if (!fmSource) {
+      setFiles([])
+      setCwd('')
+      setFileListTruncated(false)
+      setFileListTotal(0)
+      return
+    }
+    // 新目录/新 source 默认回到截断视图；SSE 刷新与排序保持当前「加载全部」选择
+    showAllFilesRef.current = false
+    setFileListTruncated(false)
+    setFileListTotal(0)
     // 切换 source 类型（workspace ↔ session）时清空旧 source 留下的 drawer 路径，
     // 避免 workspaceRoot 更新为新源后与旧 filePath 失配而误弹越界确认
     // （FileDrawer 的 workspaceDrawerPath 属于 workspace 模式，fmState.drawerPath 属于 session 模式）。
@@ -429,6 +512,8 @@ export function FileManager() {
       setCwd(cached.cwd)
       setIsOutsideWorkspace(cached.isOutsideWorkspace)
       setWorkspaceRoot(cached.workspaceRoot)
+      setFileListTruncated(cached.truncated)
+      setFileListTotal(cached.total)
     }
     if (fmSource.type === 'workspace') {
       fetchFilesRef.current('.')
@@ -504,13 +589,13 @@ export function FileManager() {
   const handleRowClick = (entry: FileEntry, e?: React.MouseEvent) => {
     if (suppressClick.current) return
     if (editingName) return
-    const fullPath = joinPath(cwd, entry.name)
+    const fullPath = entryPath(entry)
     const idx = files.indexOf(entry)
 
     if (e?.shiftKey && selectAnchor.current >= 0) {
       const start = Math.min(selectAnchor.current, idx)
       const end = Math.max(selectAnchor.current, idx)
-      const range = files.slice(start, end + 1).map((f) => joinPath(cwd, f.name))
+      const range = files.slice(start, end + 1).map((f) => entryPath(f))
       setSelected(new Set(range))
       return
     }
@@ -547,6 +632,11 @@ export function FileManager() {
     }
     setSortKey(key)
     setSortDesc(newDesc)
+    if (activeSearchQuery) {
+      // 搜索结果最多 100 条，本地排序；不要为了排序把结果替换成目录列表
+      setFiles((prev) => sortFileEntries(prev, key, newDesc))
+      return
+    }
     fetchFiles(undefined, key, newDesc)
   }
 
@@ -601,6 +691,8 @@ export function FileManager() {
     setCreateName('')
     setSearchOpen(false)
     setSearchQuery('')
+    setActiveSearchQuery('')
+    setSearchTruncated(false)
   }, [sourceKey])
 
   const toggleSearch = () => {
@@ -609,6 +701,8 @@ export function FileManager() {
       setSearchQuery('')
     } else {
       setSearchOpen(true)
+      // 重新打开时带回当前生效的查询，避免用户只看到结果却想不起搜了什么
+      setSearchQuery(activeSearchQuery)
       setTimeout(() => searchRef.current?.focus(), 0)
     }
   }
@@ -624,6 +718,7 @@ export function FileManager() {
     if (tag === 'INPUT' || tag === 'TEXTAREA') return
     if (e.key === 'Escape') {
       if (searchOpen) { setSearchOpen(false); setSearchQuery(''); return }
+      if (activeSearchQuery) { clearSearch(); return }
       if (createOpen) { closeCreate(); return }
       if (downloadMode) { exitDownloadMode(); return }
     } else if (e.key === 'Delete') {
@@ -639,7 +734,7 @@ export function FileManager() {
       }
     } else if (e.key === 'a' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault()
-      setSelected(new Set(files.map((f) => joinPath(cwd, f.name))))
+      setSelected(new Set(files.map((f) => entryPath(f))))
     }
   }
 
@@ -787,23 +882,51 @@ export function FileManager() {
     input.click()
   }
 
-  const handleSearch = async () => {
-    if (!searchQuery.trim() || !fmSource) { fetchFiles(); return }
+  const clearSearch = () => {
+    setSearchOpen(false)
+    setSearchQuery('')
+    setActiveSearchQuery('')
+    setSearchTruncated(false)
+    fetchFiles()
+  }
+
+  const runSearch = async (query: string) => {
+    if (!fmSource) return
     setLoading(true)
     try {
-      const results = await api.searchFiles2({
+      const data = await api.searchFiles2({
         session: fmSource.type === 'session' ? fmSource.id : undefined,
         workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
         projectId: activeProjectId ?? undefined,
-        query: searchQuery,
+        query,
         path: cwd,
       })
-      setFiles(results)
+      const results = data.files ?? []
+      setFiles(sortFileEntries(results, sortKeyRef.current, sortDescRef.current))
+      setActiveSearchQuery(query)
+      setSearchTruncated(data.truncated ?? false)
+      setFileListTruncated(false)
+      setFileListTotal(results.length)
     } catch (err: unknown) {
       addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.searchFailed'))
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleSearch = () => {
+    const query = searchQuery.trim()
+    if (!query) {
+      clearSearch()
+      return
+    }
+    void runSearch(query)
+  }
+
+  // 用户显式要求完整列表：绕过后端 MAX_LIST_ENTRIES，后续刷新保持该选择
+  const handleLoadAllFiles = () => {
+    showAllFilesRef.current = true
+    void fetchFilesRef.current(undefined, undefined, undefined, false, true)
   }
 
   // ── Download mode handlers ──
@@ -833,8 +956,10 @@ export function FileManager() {
           document.body.removeChild(a)
         })
         if (filePaths.length === 1) {
-          const name = filePaths[0].split('/').pop() || ''
-          const entry = files.find((f) => f.name === name)
+          const filePath = filePaths[0]
+          const name = filePath.split('/').pop() || ''
+          // 搜索结果可能有同名文件，按完整路径匹配而不是仅按 name
+          const entry = files.find((f) => entryPath(f) === filePath)
           const isDir = entry && (entry.path_type === 'Dir' || entry.path_type === 'SymlinkDir')
           addToast('success', isDir
             ? t('fm.downloadStartedDir', { name })
@@ -868,7 +993,7 @@ export function FileManager() {
     if (checked.size === files.length) {
       setChecked(new Set())
     } else {
-      setChecked(new Set(files.map((f) => joinPath(cwd, f.name))))
+      setChecked(new Set(files.map((f) => entryPath(f))))
     }
   }
 
@@ -942,6 +1067,16 @@ export function FileManager() {
       path: isWinPath ? (i === 0 ? joined + '/' : joined) : '/' + joined
     }
   })
+
+  // 大列表窗口化：阈值以下 start/end 覆盖全量，行为与虚拟滚动前一致
+  const fileWindow = useMemo(
+    () => computeFileListWindow(files.length, fileListScrollTop, fileListViewportH),
+    [files.length, fileListScrollTop, fileListViewportH],
+  )
+  const visibleFiles = fileWindow.start === 0 && fileWindow.end === files.length
+    ? files
+    : files.slice(fileWindow.start, fileWindow.end)
+  const fileColumnCount = downloadMode ? 5 : 4
 
   return (
     <div
@@ -1069,7 +1204,14 @@ export function FileManager() {
           </div>
 
           {/* 7. Refresh (moved to the end) */}
-          <button className="fm-btn" onClick={() => fetchFiles()} title={t('fm.refresh')}>
+          <button
+            className="fm-btn"
+            onClick={() => {
+              if (activeSearchQuery) void runSearch(activeSearchQuery)
+              else fetchFiles()
+            }}
+            title={t('fm.refresh')}
+          >
             <IconRefresh />
           </button>
         </div>
@@ -1120,6 +1262,25 @@ export function FileManager() {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        {!loading && activeSearchQuery && (
+          <div className="fm-search-results-bar">
+            <span>
+              {t('fm.searchResults', { query: activeSearchQuery, count: files.length })}
+              {searchTruncated ? ` · ${t('fm.searchTruncated')}` : ''}
+            </span>
+            <button className="fm-search-clear" onClick={clearSearch}>
+              {t('fm.clearSearch')}
+            </button>
+          </div>
+        )}
+        {!loading && files.length > 0 && fileListTruncated && (
+          <div className="fm-truncated-bar">
+            <span>{t('fm.listTruncated', { shown: files.length, total: fileListTotal })}</span>
+            <button className="fm-truncated-action" onClick={handleLoadAllFiles}>
+              {t('fm.loadAll')}
+            </button>
+          </div>
+        )}
         {!fmSource ? (
           <div className="fm-empty">
             <span className="fm-empty-icon"><IconFolderOpen width={32} height={32} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))' }} /></span>
@@ -1130,11 +1291,16 @@ export function FileManager() {
         ) : files.length === 0 ? (
           <div className="fm-empty">
             <span className="fm-empty-icon"><IconFolderOpen width={32} height={32} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))' }} /></span>
-            <span>{t('fm.emptyDir')}</span>
-            <span className="fm-empty-hint">{t('fm.dragHint')}</span>
+            <span>{activeSearchQuery ? t('fm.searchNoResults') : t('fm.emptyDir')}</span>
+            {!activeSearchQuery && <span className="fm-empty-hint">{t('fm.dragHint')}</span>}
           </div>
         ) : (
-          <div className="fm-table-scroll" style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto' }}>
+          <div
+            ref={fileListScrollRef}
+            className="fm-table-scroll"
+            style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto' }}
+            onScroll={handleFileListScroll}
+          >
             {/* 自适应模式给 table 显式宽度，让 table-layout: fixed 真正生效
                 （列宽由 JS 精确分配、总宽=容器宽，窄面板下按优先级压缩而非
                 溢出被 sticky 遮挡，X17）；手动态保持无宽度的 auto 布局，
@@ -1187,12 +1353,21 @@ export function FileManager() {
                 </tr>
               </thead>
               <tbody>
-                {files.map((f) => {
-                  const fullPath = joinPath(cwd, f.name)
+                {fileWindow.topPad > 0 && (
+                  <tr className="fm-spacer-row" aria-hidden="true">
+                    <td colSpan={fileColumnCount} style={{ height: fileWindow.topPad }} />
+                  </tr>
+                )}
+                {visibleFiles.map((f) => {
+                  const fullPath = entryPath(f)
                   const isDir = isDirEntry(f.path_type)
                   const isEditing = editingName === fullPath
                   const isSel = selected.has(fullPath)
                   const isChecked = checked.has(fullPath)
+                  // 搜索结果按相对路径展示父目录；目录列表没有 rel_path，不渲染
+                  const relDir = f.rel_path?.includes('/')
+                    ? f.rel_path.slice(0, f.rel_path.lastIndexOf('/'))
+                    : ''
                   return (
                     <tr
                       key={fullPath}
@@ -1231,13 +1406,16 @@ export function FileManager() {
                               onClick={(e) => e.stopPropagation()}
                             />
                           ) : (
-                            <span className="fm-name-text" title={f.name}>{f.name}</span>
+                            <>
+                              <span className="fm-name-text" title={f.rel_path ?? f.name}>{f.name}</span>
+                              {relDir && <span className="fm-search-relpath" title={f.rel_path}>{relDir}</span>}
+                            </>
                           )}
                         </div>
                       </td>
                       {/* 容器 direction:rtl 只为左侧省略号；bdi 隔离避免日期中的 - : 被 bidi 重排 */}
                       <td className="fm-td-time" title={formatTime(f.mtime)}><bdi dir="ltr">{formatTime(f.mtime)}</bdi></td>
-                      <td className="fm-td-size" title={isDir ? `${f.size} ${t('fm.items')}` : formatSize(f.size)}>{isDir ? `${f.size} ${t('fm.items')}` : formatSize(f.size)}</td>
+                      <td className="fm-td-size" title={isDir ? undefined : formatSize(f.size)}>{isDir ? '-' : formatSize(f.size)}</td>
                       <td className="fm-td-actions-cell">
                         <span
                           className="fm-act-icon"
@@ -1290,6 +1468,11 @@ export function FileManager() {
                     </tr>
                   )
                 })}
+                {fileWindow.bottomPad > 0 && (
+                  <tr className="fm-spacer-row" aria-hidden="true">
+                    <td colSpan={fileColumnCount} style={{ height: fileWindow.bottomPad }} />
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

@@ -254,6 +254,17 @@ export function IconX(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+/** History: clock with a rewind arrow (file-scoped commit history). */
+export function IconHistory(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M2.5 8a5.5 5.5 0 1 0 1.61-3.89" />
+      <path d="M2.5 2.5v3.5H6" />
+      <path d="M8 5.25V8l2 1.25" />
+    </svg>
+  )
+}
+
 export function IconPlus(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>
@@ -292,6 +303,30 @@ export function IconGitBranch(props: SVGProps<SVGSVGElement>) {
   )
 }
 export { IconGitBranch as IconBranch }
+
+/** Merge: two lines converging into a shared commit. */
+export function IconGitMerge(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="4" cy="4" r="1.75" />
+      <circle cx="4" cy="12" r="1.75" />
+      <circle cx="12" cy="8" r="1.75" />
+      <path d="M4 5.75v4.5M5.5 4H8a4 4 0 014 4v0.25" />
+    </svg>
+  )
+}
+
+/** Rebase: replay commits onto another base (arrow onto a line). */
+export function IconGitRebase(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="4" cy="12.5" r="1.75" />
+      <circle cx="12" cy="3.5" r="1.75" />
+      <path d="M4 10.75V7.5A3.5 3.5 0 017.5 4h2.75" />
+      <path d="M9 6.25l1.75-1.75L9 2.75" />
+    </svg>
+  )
+}
 
 /** 批量操作：双行勾选列表（Sidebar 会话右键/长按菜单入口）。 */
 export function IconListChecks(props: SVGProps<SVGSVGElement>) {

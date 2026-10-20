@@ -47,6 +47,28 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [0.3.4] - 2026-10-20
+
+### Added
+
+- (2026-10-20 04:26) `[frontend]` `[backend]` `[api]` GIT 面板补充提交详情文件列表与 HISTORY 过滤：commit 抽屉展示该提交变更的文件（状态字母/rename 原路径/截断提示，`git show --name-status`）；历史支持单文件（文件行时钟入口 + 可清除的路径 chip）与全分支（ALL 切换）过滤，`/git/log` 新增 `path`/`all` 参数（`src/git/repo.rs`、`src/api/git.rs`、`frontend/src/components/GitPanel/{GitPanel,FileSections,GitDrawer}.tsx`）
+- (2026-10-20 03:35) `[frontend]` `[backend]` `[api]` GIT 面板支持分支对比（range diff）：CHANGES 视图的 BASE 选择器切换为只读 `base...HEAD` 文件列表（rename 显示原路径，空态/截断提示），点文件查看只读 diff；新增 `GET /git/range`，以 merge-base 校验基线并复用 256KB 截断（`src/git/repo.rs`、`frontend/src/components/GitPanel/{GitPanel,FileSections,GitDrawer}.tsx`）
+- (2026-10-20 03:35) `[frontend]` `[backend]` `[api]` GIT 面板支持 merge/rebase 与统一中断态：分支行内「合并到当前分支」「变基到…」（变基二次确认并提示历史重写）；`/git/status` 新增 `in_progress`（merge/rebase/cherry-pick/revert/am，含冲突数，兼容 worktree），面板常驻横幅提供 CONTINUE（有冲突时禁用）/ABORT（二次确认）；新增 `POST /git/merge|rebase|operation/continue|operation/abort`，continue 不拉起交互编辑器（`src/git/repo.rs`、`src/api/git.rs`、`frontend/src/components/GitPanel/OperationBanner.tsx`）
+- (2026-10-20 02:55) `[frontend]` `[backend]` `[api]` GIT 面板支持 hunk 级 stage / unstage / revert：diff 抽屉内每个 hunk 带 `+` / `−` / `↺` 操作（revert 二次确认），后端预切分可 apply patch 并在应用前与当前 diff 逐字比对，内容已变化返回 `stale_hunk` 并自动刷新；新增 diff 上下文展开切换（U3 ↔ U10）。rename/新增/删除/mode-only/二进制/超限 diff 不提供 hunk 按钮（`src/git/repo.rs`、`GET /git/hunks`、`POST /git/hunk`、`frontend/src/components/GitPanel/{GitDrawer,DiffView}.tsx`）
+
+### Changed
+
+- (2026-10-20 10:44) `[frontend]` `[backend]` `[api]` 文件搜索优化：遍历改为按需 stat（普通条目只读 `file_type`，命中项才取 metadata），增加 100k 扫描预算；结果按 `rel_path` 确定性排序，`GET /files/search` 返回 `{files,truncated}`，最多 100 条并明示截断；搜索态新增结果横幅/清除，表头排序改为本地排序，SSE 不再覆盖搜索结果（2 万文件树罕见查询实测 ~0.8s → ~0.05s）（`src/fs/mod.rs`、`src/api/files.rs`、`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/FileManager/fileListSort.ts`、`frontend/src/api/client.ts`）
+- (2026-10-20 10:22) `[frontend]` `[backend]` `[api]` 文件管理器列表加入 wire 级上限：目录列表默认最多返回 5000 条并带 `total`/`truncated`，超出时表格上方显示「前 N / 共 M 项」与「加载全部」（`all=true` 显式绕过）；目录浏览弹窗同样只返回目录并应用该上限。**BREAKING** 项目兜底 `GET /files?workspace=` 从裸数组改为 `{files,total,truncated}`（当前前端未使用该路径）（`src/api/files.rs`、`src/api/system.rs`、`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/hooks/useDirBrowser.ts`）
+- (2026-10-20 10:11) `[frontend]` `[backend]` `[api]` 文件管理器大目录加载优化：目录列表不再为每个子目录额外 `read_dir` 预统计条目数（目录 Size 列显示 `-`，接口 `size` 对目录为 `null`），普通条目元数据从两次 stat 合并为一次；文件表格超过 200 行启用虚拟滚动，只渲染可视区 + overscan（`src/fs/mod.rs`、`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/FileManager/fileListWindow.ts`、`frontend/src/components/FileManager/useFileDrag.ts`）
+- (2026-10-20 02:10) `[backend]` 版本探测支持可选 GitHub token：每次请求现读 `GH_TOKEN`/`GITHUB_TOKEN`（优先级同 `gh`，不落盘），有效时以 Bearer 认证把 API 额度提升到 5000 次/时；token 缺失/失效/额度耗尽继续按渠道降级。两个变量加入 `startup_leak_env_vars`，不再继承进 tmux/pty/ACP agent 及 update 子进程（`src/update.rs`、`src/engine/pty_io.rs`、`src/acp/agent_proc.rs`）
+
+### Fixed
+
+- (2026-10-20 10:44) `[frontend]` 修复文件搜索结果路径错误：同名嵌套文件此前用 `cwd + name` 计算完整路径，点击/拖拽/删除可能指向根目录同名文件；现统一使用后端 `rel_path`，并在结果行弱化显示相对目录以区分同名项（`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/FileManager/useFileDrag.ts`）
+- (2026-10-20 02:55) `[frontend]` 修复 GIT 面板写操作并发时第二个操作未执行却提示成功：`gitStore.mutate` 忙时返回 `false`，调用方不再弹成功 toast / 刷新（hunk 快速连点场景尤易触发）（`frontend/src/stores/gitStore.ts`）
+- (2026-10-20 01:15) `[frontend]` `[backend]` 修复长期打开的标签页收不到新版本提醒：UpdateBadge 从「挂载时一次性探测、失败静默吞掉」改为每 10 分钟轮询并在页面恢复可见/网络恢复时补查（失败保留 console 诊断），服务端版本成功缓存 1h→15min 且主源/降级源失败写入 daemon 日志（`frontend/src/components/Sidebar/UpdateBadge.tsx`、`src/api/system.rs`）
+
 ## [0.3.3] - 2026-10-20
 
 ### Added
