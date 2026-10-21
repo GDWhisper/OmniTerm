@@ -516,9 +516,23 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
 
   // CurrentModeUpdate
   if (variant === 'CurrentModeUpdate' || variant === 'current_mode_update') {
-    const inner = getVariantInner(obj, variant)
-    const mode = inner ? inner['mode'] : undefined
-    if (typeof mode === 'string') return { kind: 'setMode', mode }
+    // ACP v1 的线格式字段是 `currentModeId`（SessionUpdate::CurrentModeUpdate，
+    // camelCase）；早期实现/旧测试用 `mode`。只认 `mode` 会让状态通知落到末尾的
+    // `pushSystem` 兜底——live 列表多出一条 SYSTEM 消息、assistant 尾部被打断，
+    // 同一 turn 被拆成多条消息后，前一条的尾随过程块永远露在折叠容器外
+    // （2026-10-20 用户报告的「一段运行过程未折叠」即由此触发）。
+    const inner = getVariantInner(obj, variant) ?? obj
+    const mode =
+      typeof inner['mode'] === 'string'
+        ? inner['mode']
+        : typeof inner['currentModeId'] === 'string'
+          ? inner['currentModeId']
+          : typeof inner['current_mode_id'] === 'string'
+            ? inner['current_mode_id']
+            : undefined
+    if (mode) return { kind: 'setMode', mode }
+    // 形状不认识 = 状态类通知，不是内容：丢弃，绝不渲染成 SYSTEM 消息。
+    return { kind: 'drop' }
   }
 
   // ToolCall / ToolCallUpdate — both upsert by toolCallId. ToolCallUpdate is a

@@ -1437,12 +1437,21 @@ export const useChatStore = create<ChatStore>((set, getStore) => ({
       const current = get(state, sessionId)
       const messages = [...current.messages]
       const idx = messages.findIndex((m) => m.id === rowId)
+      // 快照是**整轮**的权威内容：同一轮在 live store 里可能已被独立 SYSTEM 消息
+      // 切成多条 streaming assistant（例如 vendor 状态帧兜底成 SYSTEM 行）。
+      // 只收编尾部 assistant 会漏掉早先的分身，它们最后一段 text 之后的尾随过程块
+      // 永远露在折叠容器外（2026-10-20 用户报告）。这里把本轮所有 streaming
+      // assistant 收编成一条快照消息并放到末尾，后续 live 帧才能继续挂到它上面。
+      const streamingIdxs: number[] = []
+      for (let i = 0; i < messages.length; i++) {
+        const m = messages[i]
+        if (m.role === 'assistant' && m.streaming && i !== idx) streamingIdxs.push(i)
+      }
       const prevCreatedAt =
         idx >= 0
           ? messages[idx].createdAt
-          : messages[messages.length - 1]?.role === 'assistant' &&
-              messages[messages.length - 1]?.streaming
-            ? messages[messages.length - 1].createdAt
+          : streamingIdxs.length > 0
+            ? messages[streamingIdxs[streamingIdxs.length - 1]].createdAt
             : Date.now()
       const msg: ChatMessage = {
         id: rowId,
@@ -1453,18 +1462,9 @@ export const useChatStore = create<ChatStore>((set, getStore) => ({
         createdAt: prevCreatedAt,
         streaming: true,
       }
-      if (idx >= 0) {
-        messages[idx] = msg
-      } else {
-        const lastIdx = messages.length - 1
-        const last = messages[lastIdx]
-        if (last && last.role === 'assistant' && last.streaming) {
-          // 收编末尾 live streaming 消息，统一 id=rowId 供后续快照匹配。
-          messages[lastIdx] = msg
-        } else {
-          messages.push(msg)
-        }
-      }
+      const streamingSet = new Set(streamingIdxs)
+      const kept = messages.filter((_, i) => i !== idx && !streamingSet.has(i))
+      kept.push(msg)
       // 看板同步：快照 blocks 可能含最新 todo，扫描并更新（与 hydrate 一致）。
       let todos = current.todos
       let todosTitle = current.todosTitle
@@ -1479,7 +1479,7 @@ export const useChatStore = create<ChatStore>((set, getStore) => ({
       // 快照的 blocks 已包含 mid-turn SYSTEM 告知；live 的独立 system 消息按
       // noticeId 收口，避免同一告知在快照收编后出现两次。
       return patch(state, sessionId, {
-        messages: dropInlinedSystemMessages(messages),
+        messages: dropInlinedSystemMessages(kept),
         todos,
         todosTitle,
       })

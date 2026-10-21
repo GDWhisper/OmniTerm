@@ -121,6 +121,20 @@ describe('evicted prose prefix recovery (decodeStoredBlocks)', () => {
       { type: 'text', text: 'after' },
     ])
   })
+
+  it('drops current_mode_update frames instead of decoding a SYSTEM block', () => {
+    const wrapper = JSON.stringify({
+      v: 1,
+      frames: [
+        chunkFrame('before'),
+        { sessionUpdate: 'current_mode_update', currentModeId: 'plan' },
+        chunkFrame('after'),
+      ],
+    })
+    expect(decodeStoredBlocks(wrapper, 'beforeafter')).toEqual([
+      { type: 'text', text: 'beforeafter' },
+    ])
+  })
 })
 
 describe('mid-turn join — prompt_done skips cooked write-back', () => {
@@ -301,5 +315,116 @@ describe('mid-turn join — prompt_done skips cooked write-back', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const body = JSON.parse(fetchMock.mock.calls[0][1].body)
     expect(body.messages[0].id).toBe('row-10')
+  })
+
+  it('ACP current_mode_update（currentModeId）更新模式且不拆 turn', () => {
+    const ws = mount()
+    act(() => {
+      ws.onopen?.()
+      useChatStore.getState().setHydrated('s1', true)
+      useChatStore.getState().beginPrompt('s1')
+    })
+
+    send(ws, {
+      type: 'session_update',
+      seq: 1,
+      data: { update: chunkFrame('before') },
+    })
+    // 真实 ACP 线格式：sessionUpdate 判别串 + camelCase currentModeId。
+    send(ws, {
+      type: 'session_update',
+      seq: 2,
+      data: { update: { sessionUpdate: 'current_mode_update', currentModeId: 'plan' } },
+    })
+    send(ws, {
+      type: 'session_update',
+      seq: 3,
+      data: { update: chunkFrame(' after') },
+    })
+    send(ws, { type: 'prompt_done', stop_reason: 'end_turn', row_id: 'row-11' })
+
+    const st = useChatStore.getState().states['s1']
+    expect(st.mode).toBe('plan')
+    // 状态更新不得落成独立 SYSTEM 消息：否则尾部被打断，同一 turn 被拆成两条
+    // assistant（前一条的尾随过程块露在折叠容器外）。
+    expect(st.messages).toHaveLength(1)
+    expect(st.messages[0].role).toBe('assistant')
+    expect(st.messages[0].blocks).toEqual([{ type: 'text', text: 'before after' }])
+  })
+
+  it('形状不认识的 current_mode_update 直接丢弃，不退化成 SYSTEM 消息', () => {
+    const ws = mount()
+    act(() => {
+      ws.onopen?.()
+      useChatStore.getState().setHydrated('s1', true)
+      useChatStore.getState().beginPrompt('s1')
+    })
+
+    send(ws, {
+      type: 'session_update',
+      seq: 1,
+      data: { update: chunkFrame('before') },
+    })
+    send(ws, {
+      type: 'session_update',
+      seq: 2,
+      data: { update: { sessionUpdate: 'current_mode_update' } },
+    })
+    send(ws, {
+      type: 'session_update',
+      seq: 3,
+      data: { update: chunkFrame(' after') },
+    })
+    send(ws, { type: 'prompt_done', stop_reason: 'end_turn', row_id: 'row-12' })
+
+    const st = useChatStore.getState().states['s1']
+    expect(st.messages).toHaveLength(1)
+    expect(st.messages[0].blocks).toEqual([{ type: 'text', text: 'before after' }])
+  })
+
+  it('turn_snapshot 收编被 SYSTEM 行切开的 streaming 分身，后续帧继续挂到快照', () => {
+    const ws = mount()
+    act(() => {
+      ws.onopen?.()
+      useChatStore.getState().setHydrated('s1', true)
+      useChatStore.getState().beginPrompt('s1')
+    })
+
+    send(ws, {
+      type: 'session_update',
+      seq: 1,
+      data: { update: chunkFrame('early') },
+    })
+    // 独立 SYSTEM 行把尾部从 assistant 上摘掉；随后 prose 只能另起一条 assistant。
+    send(ws, { type: 'system_message', label: 'CurrentModeUpdate' })
+    send(ws, {
+      type: 'session_update',
+      seq: 2,
+      data: { update: chunkFrame('more') },
+    })
+    send(ws, { type: 'system_message', label: 'notice2' })
+
+    send(ws, {
+      type: 'turn_snapshot',
+      row_id: 'row-9',
+      text: 'earlymore',
+      blocks: frameWrapper(['earlymore']),
+      seq: 10,
+    })
+    send(ws, {
+      type: 'session_update',
+      seq: 11,
+      data: { update: chunkFrame(' tail') },
+    })
+    send(ws, { type: 'prompt_done', stop_reason: 'end_turn', row_id: 'row-9' })
+
+    const msgs = useChatStore.getState().states['s1'].messages
+    // 两条 streaming 分身都被快照收编，只剩 SYSTEM 行 + 一条快照消息。
+    expect(msgs.map((m) => m.role)).toEqual(['system', 'system', 'assistant'])
+    expect(msgs.filter((m) => m.role === 'assistant')).toHaveLength(1)
+    expect(msgs[2].id).toBe('row-9')
+    // 快照之后的 live 帧仍能挂到快照上（tail 是 streaming assistant）。
+    expect(msgs[2].text).toBe('earlymore tail')
+    expect(msgs[2].streaming).toBeFalsy()
   })
 })

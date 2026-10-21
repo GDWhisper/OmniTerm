@@ -45,6 +45,7 @@
 
 **案例证据**：
 - 2026-07-19 crate 默认外部标签枚举 vs codebuddy 扁平判别字段，`extractTextChunk` 落 fallback → `[update]` 芯片刷屏。修复：`SESSION_UPDATE_ADAPTERS` 表 normalize + `classifySessionUpdate` 动作标签。
+- 2026-10-20 ACP `current_mode_update` 的字段是 `currentModeId`（SDK 1.9 camelCase），前端只读 `mode` → 落 `pushSystem` fallback，把状态帧渲染成独立 SYSTEM 消息并打断 assistant 尾部；同一 turn 被拆成多条后，前一条最后 text 之后的思考/工具/权限块永远露在折叠容器外。修复：分类器兼容 `currentModeId` / `current_mode_id` / `mode`，未知形状 drop；`turn_snapshot` 收编本轮所有 streaming 分身。
 
 ---
 
