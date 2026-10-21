@@ -1,6 +1,6 @@
 # 浏览器桌面通知（ACP attention 事件 → Notification API）
 
-> 状态：**已实施**（2026-10-21）——实施偏差见 §0.2（D6 判据补「标签页隐藏」豁免、设置项独立成文件、新增「通知」分类页）
+> 状态：**已归档（2026-10-21）**——已实施（2026-10-21），实施记录、实施偏差与验收对照见本文 §0
 > 触发条件：改 `frontend/src/components/Attention/AttentionProvider.tsx`、`frontend/src/utils/desktopNotification.ts`、`useAcpChat` 的 attention 触发点、动 Settings 通知开关，或新增浏览器通知能力前**必读**
 > 关联：`docs/dev/plans/2026-07-27-acp-session-enhancements.md` F07（本文是它的落地计划）、`docs/dev/plans/backlog/improvement-directions-remaining.md` X01（本文承担 X01 的「浏览器通道」半边）、`docs/dev/performance-and-safety.md` §S3
 

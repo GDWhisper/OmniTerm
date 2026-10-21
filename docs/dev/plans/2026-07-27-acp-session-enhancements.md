@@ -10,7 +10,7 @@
 > |---|---|---|
 > | F05 | 检查点 / 回滚 | **重做**：`docs/dev/plans/2026-10-21-acp-turn-checkpoint-rollback.md`（原 §3.5 的 git 语义与触发时机均不成立，见该文 §1 + 本文 §3.5 勘误） |
 > | F06 | 会话内搜索 | `docs/dev/plans/2026-10-21-acp-chat-fulltext-search.md` |
-> | F07 | 浏览器桌面通知 | `docs/dev/plans/2026-10-21-browser-desktop-notification.md`（**2026-10-21 已实施**） |
+> | F07 | 浏览器桌面通知 | `docs/dev/plans/archive/2026-10-21-browser-desktop-notification.md`（**2026-10-21 已实施**） |
 > | F08 | 会话导出 Markdown | `docs/dev/plans/archive/2026-10-21-acp-session-markdown-export.md`（**2026-10-21 已实施**） |
 
 ---

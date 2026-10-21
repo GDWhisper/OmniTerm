@@ -33,7 +33,7 @@
 
 ## 通知功能 ⚪
 
-- [x] **任务状态通知（浏览器通道，2026-10-21）** — agent 回合结束（done）/ 出错（error）/ 需要审批（decision）三类事件走浏览器桌面通知（`Notification` API），计划见 `docs/dev/plans/2026-10-21-browser-desktop-notification.md`。
+- [x] **任务状态通知（浏览器通道，2026-10-21）** — agent 回合结束（done）/ 出错（error）/ 需要审批（decision）三类事件走浏览器桌面通知（`Notification` API），计划见 `docs/dev/plans/archive/2026-10-21-browser-desktop-notification.md`。
   - 通知**只含会话名 + 事件类型**，不含 agent 回复正文（OS 通知在锁屏明文显示）。
   - 开关在 Settings → 通知（localStorage，不落 settings 表——通知权限是浏览器级状态）；能力/权限态如实展示，不可用时写明原因（主部署形态「局域网 IP + 明文 http」不是 secure context，浏览器不提供该能力）。
   - 多标签页去重（BroadcastChannel，先声明者发）。
