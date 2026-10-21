@@ -31,6 +31,7 @@ import { CreateWorktreeModal } from './CreateWorktreeModal'
 import { ExternalSessionsSection } from './ExternalSessionsSection'
 import { ArchivedSessionsSection } from './ArchivedSessionsSection'
 import { SessionContextMenu, type SessionContextMenuState } from './SessionContextMenu'
+import { useSessionExport } from '../../hooks/useSessionExport'
 import type { ContextMenuPoint } from '../Common/ContextMenu'
 import { BatchActionBar } from './BatchActionBar'
 import { BatchSessionDialog, type BatchAction, type BatchTarget } from './BatchSessionDialog'
@@ -116,6 +117,10 @@ export function Sidebar() {
   // agent 注册表：会话显示名的兜底来源（未命名 ACP 会话的 `${agent}_${MMdd-HHmm}`
   // 默认名由它 + created_at 现算，见 utils/sessionDisplayName.ts）。
   const agents = useAgentStore((s) => s.agents)
+
+  // 会话导出 Markdown（F08）：入口在会话右键/长按菜单，导出的是**指定会话**的
+  // 历史，与当前打开哪个会话无关（故不依赖聊天面板在场）。
+  const { exportSession } = useSessionExport()
 
   // ACP 会话活动状态（chatStore 派生）：与 tmux 屏幕检测的 agent_state 归一，
   // 使两类会话的 Sidebar 状态点/聚合徽标表现一致。useShallow 保证仅在
@@ -818,6 +823,15 @@ export function Sidebar() {
   const closeContextMenu = useCallback(() => setContextMenu(null), [])
   const closeBatchDialog = useCallback(() => setBatchTarget(null), [])
 
+  // 菜单「导出为 Markdown」：导出该会话的完整历史为 .md 文件。
+  // 导出是异步的（要分页拉全量），菜单会随即关闭，结果由 toast 如实上报。
+  const handleExportSession = useCallback(
+    (session: Session) => {
+      void exportSession(session)
+    },
+    [exportSession],
+  )
+
   const handleExitBatchMode = useCallback(() => {
     setSelectionMode(false)
     setSelectedSessionIds(new Set())
@@ -1277,6 +1291,7 @@ export function Sidebar() {
         onClose={closeContextMenu}
         onBatchMode={handleEnterBatchMode}
         onRename={handleRenameSession}
+        onExport={handleExportSession}
       />
 
       {/* ── 批量操作确认弹窗（归档 / 释放进程 / 删除）── */}

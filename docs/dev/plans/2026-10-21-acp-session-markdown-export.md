@@ -15,8 +15,10 @@
 | `frontend/src/utils/sessionExport.ts` | `fetchAllMessages`（独立分页拉全量 + 载荷预算）、`downloadMarkdown`（Blob 下载 + 释放 object URL）、`exportFileName`（文件名清洗） |
 | `frontend/src/utils/markdownI18n.ts` | 导出件的 **i18n 接线**：导出件用到的全部 i18n key 只有这一处（序列化器是纯函数，不依赖 react-i18next） |
 | `frontend/src/utils/textBytes.ts` | UTF-8 字节数（`length` 是 UTF-16 code unit，中文会低估一半） |
-| `frontend/src/utils/storedMessages.ts` | `GET /messages` 行的**单一类型定义**（原为 ChatView 私有 interface） |
-| `frontend/src/components/Chat/ChatView.tsx` | 标题栏导出按钮（icon-only，spacer 之后、UsageIndicator 之前） |
+| `frontend/src/utils/storedMessages.ts` | `GET /messages` 行的**单一类型定义** + 行 → `ChatMessage` 的**单一转换** `toChatMessages`（原在 ChatView 私有，导出侧也要用）+ 原始帧包裹判定 `isRawFrameWrapper`（原在 useAcpChat）。blocks **解码器是注入参数**：真解码器 `decodeStoredBlocks` 住在 `hooks/useAcpChat.ts`（要经重放分类器还原），而 `utils/` 不反向依赖 `hooks/` |
+| `frontend/src/hooks/useSessionExport.ts` | 导出的**编排**（取数 → 转换 → 拼装 → 下载 → toast）。放 hook 而非 util：它需要界面语言（`t`）、agent 注册表与 toast 出口——塞进 util 会让 util 依赖 react-i18next/store，破坏「utils = 共享纯函数」分层 |
+| `frontend/src/components/Sidebar/SessionContextMenu.tsx` | **入口**：会话右键/长按菜单的「导出为 Markdown」项（仅 ACP 会话显示） |
+| `frontend/src/components/Chat/ChatView.tsx` | 只保留 hydrate/分页的 `toChatMessages` 调用（转换已下沉到 utils） |
 | `frontend/src/index.css` | `.panel-title-bar .title-bar-icon-btn`（透明底、无边框，区别于不可点的状态徽章） |
 
 **实施偏差（相对本文 D1–D9 的补充决策，均为「原计划未涉及」的部分）**
@@ -33,15 +35,27 @@
    - **默认仍是中文**（`DEFAULT_MARKERS` / `DEFAULT_SESSION_LABELS`）：序列化器
      不传参数时行为与实施前逐字不变，纯函数模块仍可在非组件上下文里复用与单测
      （口径同 `utils/sessionDisplayName.ts`）。
-2. **被省略部分的字节数是估算**（按 `text` 列长度代理）。
+2. **入口从「聊天面板标题栏按钮」改为「侧栏会话右键/长按菜单」**
+   （维护者拍板 2026-10-21：不要放在 ACP 会话顶部，挪到 sidebar 的会话右键菜单）。
+   连带决策：
+   - **只有 ACP 会话显示该项**——终端（tmux/pty）会话没有 `chat_messages`，
+     导出必然是空文件，给一个点不出结果的菜单项不如不显示。
+   - **导出的是「被右键的那个会话」**，与当前打开哪个会话无关——这恰恰是它
+     不必待在聊天面板的理由（聊天面板只在 active 会话是 ACP 时挂载）。
+   - **归档区块不加该菜单项**：`ArchivedSessionsSection` 刻意与主列表保持差异
+     （行内按钮、无右键菜单，见 2026-09-10 侧栏菜单计划）——不为此破例。
+   - 导出编排因此从 ChatView 下沉到 `hooks/useSessionExport.ts`；行 → 消息的
+     转换也随之从 ChatView 私有函数下沉到 `utils/storedMessages.ts`（导出侧
+     要用同一份转换，否则导出的正文口径会与气泡里看到的不一致）。
+3. **被省略部分的字节数是估算**（按 `text` 列长度代理）。
    工具输出在 `blocks` 列里、不在 `text` 列，故工具重的消息会被低估；头部写
    「约」字样。条数是精确值。
-3. **拉取阶段多了一个原始载荷预算**（`EXPORT_MAX_PAYLOAD_CHARS` = 32 MiB 字符）。
+4. **拉取阶段多了一个原始载荷预算**（`EXPORT_MAX_PAYLOAD_CHARS` = 32 MiB 字符）。
    渲染上限是 8 MiB，但原始载荷通常远大于渲染结果（工具输出在导出件里只留
    40 行）。不设这个上限时，「400MB 工具输出」的长会话会把 200 页 × 2MB
    全部拉进浏览器内存。触顶即停并标记 `truncated`，头部与 toast 都写明
    「更早的历史未包含」——**不静默产出残缺文件**。
-4. **文件名做了保守清洗**（路径分隔符等换成 `_`，控制字符剔除，空名兜底
+5. **文件名做了保守清洗**（路径分隔符等换成 `_`，控制字符剔除，空名兜底
    `session.md`）：会话名由用户/agent 决定，直接当文件名会被浏览器截断。
 
 **验收对照**
@@ -55,8 +69,9 @@
 | system 消息不导出 | ✅ |
 | 双上限触发仍能下载且写明省略量 | ✅ |
 | `URL.revokeObjectURL` 被调用 | ✅ 单测断言 |
-| 非 ACP 会话不出现导出按钮 | ✅ 结构保证（ChatView 只在 `runtime_kind === 'acp'` 挂载） |
-| 真实浏览器端到端 | ✅ Chromium 实测：按钮可见、点击产出 `oh-my-pi_1001-1422.md`（401 KB，头部与正文正确） |
+| 非 ACP 会话不出现导出入口 | ✅ 菜单项按 `runtime_kind === 'acp'` 过滤（终端会话无 `chat_messages`，导出必为空文件） |
+| 入口在侧栏会话右键菜单 | ✅ 组件测试（ACP 显示 / 终端不显示 / 点击回调）+ Chromium 实测：右键会话行 → 菜单三项 → 导出成功 |
+| 真实浏览器端到端 | ✅ Chromium 实测（右键菜单入口）：菜单三项（批量操作/重命名/导出为 Markdown），点击产出 `oh-my-pi_1001-1422.md`（401 KB，头部与正文正确）；zh/en 双语各自验证 |
 | 导出件文案跟随界面语言 | ✅ Chromium 双语实测：en → `# Session export: …` / zh → `# 会话导出：…`（组件测试亦有语言切换用例） |
 
 ## 1. 背景

@@ -251,8 +251,8 @@
 
 - `frontend/src/utils/messageMarkdown.ts` — 消息级「复制为 Markdown」
   （`components/Chat/messageActions.ts` 注册表里的 `copyMarkdown` 动作）
-- `frontend/src/utils/sessionMarkdown.ts` + `sessionExport.ts` — 会话级
-  「导出为 Markdown」（`ChatView` 标题栏按钮）
+- `frontend/src/utils/sessionMarkdown.ts` + `sessionExport.ts` + `hooks/useSessionExport.ts`
+  — 会话级「导出为 Markdown」（入口：**侧栏会话右键/长按菜单**，仅 ACP 会话显示）
 
 **收益**：新增导出载体（复制到剪贴板 / 下载文件 / 未来的分享入口）= 加一个
 调用点，格式自动与既有一致；图片与截断口径只有一处可调。

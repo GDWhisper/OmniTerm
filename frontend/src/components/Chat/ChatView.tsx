@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
-import { useChatStore, selectChatState, storedRawRowToSyncPayload, dropInlinedSystemMessages, type ChatMessage } from '../../stores/chatStore'
+import { useChatStore, selectChatState, storedRawRowToSyncPayload } from '../../stores/chatStore'
 import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
 import { useAgentStore } from '../../stores/agentStore'
 import { useChatShortcuts } from '../../hooks/useChatShortcuts'
@@ -15,17 +15,13 @@ import { UsageIndicator } from './UsageIndicator'
 import { TodoBoard } from './TodoBoard'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { OverlayScroll } from '../Common/OverlayScroll'
-import { IconArrowDown, IconDownload } from '../FileManager/icons'
+import { IconArrowDown } from '../FileManager/icons'
 import { READER_FONT } from '../../utils/fonts'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
-import { decodeStoredBlocks, isRawFrameWrapper, parseConfigOptions } from '../../hooks/useAcpChat'
+import { decodeStoredBlocks, parseConfigOptions } from '../../hooks/useAcpChat'
 import { postSyncPayload } from '../../utils/syncMessages'
-import { sessionDisplayName } from '../../utils/sessionDisplayName'
-import { sessionToMarkdown } from '../../utils/sessionMarkdown'
-import { sessionMarkdownLabels } from '../../utils/markdownI18n'
-import { downloadMarkdown, exportFileName, fetchAllMessages } from '../../utils/sessionExport'
-import type { StoredMessage } from '../../utils/storedMessages'
+import { toChatMessages, type StoredMessage } from '../../utils/storedMessages'
 import {
   clearChatScrollMemory,
   getChatScrollMemory,
@@ -69,57 +65,6 @@ const CHAT_STICK_THRESHOLD_PX = 24
  * 幂等 `GET /messages`。
  */
 const RESUME_CATCH_UP_GRACE_MS = 3_000
-
-/**
- * DB 行 → `ChatMessage`。首屏 hydrate 与上拉分页共用同一转换，避免两份平行的
- * blocks 解码/兜底逻辑跑偏。blocks 解不出结构时回退纯文本（text 列
- * 超长会被后端折叠成头尾 + 「已省略 N 字符」标记，故兜底文本可能不完整，但一定可读）。
- *
- * 会话级导出（utils/sessionExport.ts）复用同一转换——导出的正文口径必须与
- * 气泡里看到的完全一致。
- */
-function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
-  const messages = rows.map((m) => {
-    // rawStored：blocks 来源为后端原始帧包裹（{"v":1,"frames":[...]}）且解码出
-    // 非空结构。useAcpChat 在 hydrate 落定后据此做带 dbId 的 cooked 回写收敛残留
-    // 体积（见 2026-08-18 计划方案 B）。解码失败/为空的 RAW 行不标记——回写纯文本
-    // 兜底会覆盖后端原始帧，堵死未来分类器升级后重新解释历史的路径。
-    let rawStored = m.blocks ? isRawFrameWrapper(m.blocks) : false
-    // text 列传给解码器：RAW 帧窗口行的 blocks 可能缺被驱逐的早期正文，
-    // 解码时用全量 text 补前缀（见 useAcpChat.prependEvictedProse）。
-    let blocks = m.blocks ? decodeStoredBlocks(m.blocks, m.text) : null
-    if (!blocks || blocks.length === 0) {
-      blocks = [{ type: 'text' as const, text: m.text }]
-      rawStored = false
-    }
-    return {
-      id: m.id,
-      // Hydrated rows carry their real DB id, so a later sync can target them exactly.
-      dbId: m.id,
-      // system 行（权限超时回收告知等）由后端写入，hydrate 后以 system 消息渲染。
-      role: m.role as ChatMessage['role'],
-      text: m.text,
-      blocks,
-      rawStored,
-      createdAt: new Date(m.createdAt).getTime(),
-      // 进行中 turn 的行以 streaming 还原，供 turn_snapshot / live 帧无缝续接。
-      streaming: m.status === 'streaming',
-      // 定稿读数读自 DB：turn 定稿时后端已结算（工作时长 / 工具耗时 / 速率 /
-      // 定稿时刻），刷新后仍在（前端不自算），历史行各自显示自己那一轮的值。
-      durationMs: m.durationMs,
-      waitMs: m.waitMs,
-      toolMs: m.toolMs,
-      tps: m.tps,
-      finishedAt: m.finishedAt,
-    }
-  })
-
-  // mid-turn SYSTEM 告知双轨落盘：assistant 行内联一份有序帧（供正确排序），
-  // 独立 system 行一份兜底（帧窗口驱逐后仍可回读）。assistant 行能解出同
-  // noticeId 时过滤独立行；解不出（帧被逐出 / 旧数据）则保留独立行——数据不丢，
-  // 只是回落到列表位置。收口逻辑与分页/合并共用同一函数。
-  return dropInlinedSystemMessages(messages)
-}
 
 /**
  * ChatView — the ACP-runtime counterpart to `Terminal.tsx`. Renders a
@@ -279,7 +224,7 @@ export function ChatView() {
           useChatStore.getState().setUsage(sid, data.usage as Record<string, unknown>)
         }
         if (!data?.messages?.length) return
-        useChatStore.getState().hydrate(sid, toChatMessages(data.messages), data.nextCursor ?? null)
+        useChatStore.getState().hydrate(sid, toChatMessages(data.messages, decodeStoredBlocks), data.nextCursor ?? null)
       })
       .catch(() => {})
       .finally(() => {
@@ -324,6 +269,7 @@ export function ChatView() {
       const data = await r.json().catch(() => null)
       const merged = toChatMessages(
         Array.isArray(data?.messages) ? (data.messages as StoredMessage[]) : [],
+        decodeStoredBlocks,
       )
       useChatStore.getState().mergeLatestMessages(sid, merged)
       // RAW 残留收敛（2026-08-18 方案 B 同源）：turn 在断连期间结束 ⇒ prompt_done
@@ -441,7 +387,7 @@ export function ChatView() {
       prependAnchorRef.current = el ? { sid, scrollHeight: el.scrollHeight } : null
       useChatStore
         .getState()
-        .prependMessages(sid, toChatMessages(data?.messages ?? []), data?.nextCursor ?? null)
+        .prependMessages(sid, toChatMessages(data?.messages ?? [], decodeStoredBlocks), data?.nextCursor ?? null)
     } catch {
       // 网络失败：清 in-flight 但保留游标，用户再次上拉即重试。
       prependAnchorRef.current = null
@@ -758,61 +704,6 @@ export function ChatView() {
     useChatStore.getState().requestInsert(activeSessionId, text)
   }, [activeSessionId])
 
-  /**
-   * F08 会话导出 Markdown。
-   *
-   * - **独立分页拉全量**（`utils/sessionExport.ts`）：不复用 store 已 hydrate 的
-   *   页——那只有首屏 + 用户上拉加载过的页，复用它会导出一份「看起来完整、其实
-   *   缺了前半段」的文件（计划 D2：静默失真比不导出更糟）。
-   * - 正文由 `utils/sessionMarkdown.ts` 复用单条 `messageToMarkdown` 逐条拼，
-   *   并施加条数/字节双上限（触顶即显式标注省略量，不静默截断）。
-   * - 文件名取会话显示名单一真源（`utils/sessionDisplayName.ts`）。
-   * - 导出件文案跟随界面语言（`utils/markdownI18n.ts`）：导出件会脱离
-   *   OmniTerm 独立流通，读者看到的应是自己的语言。
-   */
-  const [exporting, setExporting] = useState(false)
-  // 导出件的文案：随界面语言变（t 的引用随语言切换而变 → memo 随之重算）。
-  const exportLabels = useMemo(() => sessionMarkdownLabels(t), [t])
-  const handleExportMarkdown = useCallback(async () => {
-    const sid = activeSessionId
-    if (!sid || exporting) return
-    setExporting(true)
-    try {
-      const { rows, truncated } = await fetchAllMessages(sid)
-      const messages = toChatMessages(rows)
-      const displayName = sessionDisplayName(activeSession ?? {}, agents, t('sidebar.unnamed'))
-      const result = sessionToMarkdown(messages, {
-        agentName: chatState.agentName || fallbackAgentName,
-        sessionName: displayName,
-        historyTruncated: truncated,
-        labels: exportLabels,
-      })
-      downloadMarkdown(exportFileName(displayName), result.markdown)
-      const toast = useToastStore.getState().addToast
-      toast('success', t('chat.export.done', { count: result.includedMessages }))
-      if (result.omittedMessages > 0) {
-        toast('warning', t('chat.export.truncated', { count: result.omittedMessages }))
-      }
-      if (truncated) {
-        // 页数上限触顶 = 更早的历史没拉全，导出件本身不完整——必须说清楚。
-        toast('warning', t('chat.export.truncatedPages'))
-      }
-    } catch {
-      useToastStore.getState().addToast('error', t('chat.export.failed'))
-    } finally {
-      setExporting(false)
-    }
-  }, [
-    activeSessionId,
-    exporting,
-    activeSession,
-    agents,
-    chatState.agentName,
-    fallbackAgentName,
-    exportLabels,
-    t,
-  ])
-
   // No session: empty-state placeholder matching Terminal.tsx's look.
   if (!activeSession) {
     return (
@@ -921,19 +812,6 @@ export function ChatView() {
           </span>
         )}
         <span className="title-bar-spacer" />
-        {/* 导出入口（F08）：icon-only，导出中禁用。放在 spacer 之后——
-            用量徽章与会话状态徽章是「只读状态」，导出是可点动作，两者不能混成一个
-            视觉层级（ui-style-guide §4.1：状态指示器不可做成 button 形状）。 */}
-        <button
-          type="button"
-          className="title-bar-icon-btn"
-          onClick={handleExportMarkdown}
-          disabled={exporting}
-          title={t('chat.export.title')}
-          aria-label={t('chat.export.title')}
-        >
-          <IconDownload width={14} height={14} />
-        </button>
         {/* 用量是会话级状态（上下文占用 / 费用），与 LIVE/DEAD 徽章同类；放在
             配置控制区会既挤占窄屏又把「只报用量不发配置」的 agent 渲染成一条
             只有圆环的配置栏。 */}

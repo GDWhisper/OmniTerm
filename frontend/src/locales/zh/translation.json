@@ -804,7 +804,7 @@
   "chat.msg.copyFailed": "复制失败",
   "chat.msg.quote": "引用",
   "chat.msg.copyMarkdown": "复制为 Markdown",
-  "chat.export.title": "导出为 Markdown",
+  "chat.export.label": "导出为 Markdown",
   "chat.export.done": "已导出 {{count}} 条消息",
   "chat.export.truncated": "受导出上限限制，已省略较早的 {{count}} 条消息",
   "chat.export.truncatedPages": "历史过长，导出内容不完整（只含最近的部分）",
