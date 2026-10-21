@@ -1,8 +1,17 @@
 # ACP 会话功能增强计划
 
-> 状态：进行中 — F01/F02/F03/F04 Phase A 已完成（2026-07-27），其余待实施
+> 状态：**P0/P1 主体已完成** — F01/F02/F03/F04 Phase A 已落地（2026-07-27）；F09 被后续计划重做（agent 侧标题回填，见 `2026-10-16-session-title-backfill.md`）；**F05/F06/F07/F08 于 2026-10-21 拆为四份独立计划**（见下表），本文不再承载其实施
 > 触发条件：2026-07-27 功能审查，对比业界主流产品（Cursor / Cline / Aider / Copilot Chat / Claude Code）识别出高中优先级缺口
 > 关联：`docs/dev/plans/archive/2026-07-20-acp-quality-gap.md`（测试基建）、`docs/architecture/frontend-patterns.md`（新组件模式）
+>
+> **2026-10-21 拆分去向**
+>
+> | 原编号 | 功能 | 去向 |
+> |---|---|---|
+> | F05 | 检查点 / 回滚 | **重做**：`docs/dev/plans/2026-10-21-acp-turn-checkpoint-rollback.md`（原 §3.5 的 git 语义与触发时机均不成立，见该文 §1 + 本文 §3.5 勘误） |
+> | F06 | 会话内搜索 | `docs/dev/plans/2026-10-21-acp-chat-fulltext-search.md` |
+> | F07 | 浏览器桌面通知 | `docs/dev/plans/2026-10-21-browser-desktop-notification.md` |
+> | F08 | 会话导出 Markdown | `docs/dev/plans/2026-10-21-acp-session-markdown-export.md` |
 
 ---
 
@@ -99,6 +108,19 @@ ACP 协议无"编辑历史消息"概念，实际语义：
 - 补全 UI 复用 ChatInput 已有的斜杠命令弹窗模式（OverlayScroll + 键盘导航）
 
 ### 3.5 F05 检查点 / 回滚 — git stash 方案
+
+> **勘误（2026-10-21）：本节全部断言已实测证伪，F05 整体重做。** 实测结论（全部可复现，非推演）：
+>
+> | 本节原文 | 实测 |
+> |---|---|
+> | 「回滚：`git stash apply <hash>` + `git stash drop <hash>`」 | `git stash drop <sha>` → `error: '<sha>' is not a stash reference`（drop 只接受 `stash@{n}`）；`git stash apply <sha>` 在工作区已被 agent 改过时 → `error: Your local changes to the following files would be overwritten by merge`——**而这正是回滚场景本身**。正确原语是 `git restore --source=<快照> -- <路径>` |
+> | 「stash 条目保留（用户可手动 `git stash list` 管理）」 | `git stash create` **不进 stash 列表**（实测 `git stash list` 仍 0 条）→ 用户看不到它，「可手动管理」不成立 |
+> | 「在执行前调用 `git stash create`」 | **干净工作区返回空字符串**（实测）→ 最常见场景（agent 改一个已提交的文件）**根本产不出快照** |
+> | 「kind = write / edit / delete」 | ACP 的 `kind` 是**可选**字段，枚举为 `read/edit/delete/move/search/execute/think/fetch/other`——**没有 `write`**；且 OmniTerm 未实现 `fs/write_text_file`（agent 自己写文件），`tool_call` 与实际写入的先后**不由协议保证** → 触发点在协议层不可靠 |
+> | 「session 级检查点列表存内存」 | 内存态在后端重启 / 多标签页 / 「释放会话后想回滚」三种场景下直接失效 → 重做方案改为**落库** |
+> | 「session 释放时检查点列表丢弃」 | release 只断 agent 进程、**文件还在**；此时丢弃 = 用户失去回滚能力 → 重做方案改为**释放时保留、删除会话时清理** |
+>
+> 重做方案（turn 边界快照 + `git restore --source` 回滚 + ref 锚定）：`docs/dev/plans/2026-10-21-acp-turn-checkpoint-rollback.md`
 
 - **触发时机**：WS handler 收到 `ToolCall` / `ToolCallUpdate`（kind = write / edit / delete）时，在执行前调用 `git stash create`（不修改工作区，只生成 commit hash）
 - **存储**：session 级检查点列表存内存（`Vec<Checkpoint>`），含 timestamp + stash hash + 触发工具描述
