@@ -712,6 +712,24 @@ agent 不支持）不依赖活连接即可单测；第二段端点的前置错�
 - **坐标不合法返回 400** 而非静默回退到首页：静默回退会让分页客户端反复拿到同一页而死循环。
 - **与 `sync_messages` 兼容**：后者从不 DELETE，所以前端 store 里只有部分历史时写回不会删掉未加载的更早行。
 
+#### 会话内全文检索：`GET /sessions/{id}/messages/search`
+
+参数 `?q=<空格分隔的关键词>&limit=<n>`，响应 `{ hits, matchCount, moreMatches, scannedRows, scannedBytes, truncated, termsTruncated }`（camelCase，与本仓其它响应一致；字段由 `SearchResult` 的 `#[serde(rename_all = "camelCase")]` 决定，不手工 `json!` 映射——手工映射会与结构体漂移）。
+
+- **用 LIKE 而不是 FTS5**（计划 D1/D2 的实测结论）：搜索范围天然被「一个会话」框住，LIKE 扫描在真实量级够快（实测 5000 行/20MB = 28ms、20000 行/77MB = 51ms），而 FTS5（trigram）实测让 DB 涨 6.7×，还要搭一套迁移 + 触发器 + 中文分词 ADR——为一个会话级搜索付这个代价是过度设计。LIKE 天然支持中文子串（unicode61 不切中文的问题在 LIKE 方案下不存在）。**升级条件是量化的**：会话文本量 p99 > 20MB 或单次检索 p99 > 200ms 时才上 FTS5。
+- **双扫描预算**（`MAX_SEARCH_ROWS=20000` 行 / `MAX_SEARCH_BYTES=16MiB` 文本字节 / `MAX_SEARCH_TERMS=8` 词 / `MAX_SEARCH_RESULTS=100` 条）：行数与字节是**两个独立轴**（一万条短消息 vs 五十条长消息），只限一个等于没限；任一触顶即停，**并在响应里显式标注省略量**（`truncated` / `scannedRows` / `scannedBytes` / `termsTruncated`）——静默截断会让用户以为搜全了，比搜不到更糟。
+- **实现成两步**：① 候选窗口只取 `(id, created_at, LENGTH(text))`（**不取 text 本体**，否则大会话会把几十 MB 文本搬进内存），在 Rust 侧累计字节定出「参与检索的范围」；② 在该范围内做 LIKE。两条查询都走 `idx_chat_messages_session(session_id, created_at)`，范围扫描有界。
+- **关键词是 AND 语义**（每个词都要在同一行出现，位置任意）；通配符 `%` `_` `\` 经 `escape_like_term` 转义后配 `ESCAPE '\'`（用户搜 `100%` 不会变成「以 100 开头」）。超词数上限的词被丢弃并由 `termsTruncated` 上报（静默丢词会让结果看着像全词命中）。
+- **只搜 `text`**（对话正文），不搜 `blocks`（JSON、MB 级、工具输出噪声大）；`system` 行（宿主内部事件）不参与检索。
+- **命中带定位游标** `<created_at>|<id>`：前端据此请求定位页把消息窗口挪到目标附近（游标格式由后端定，前端不拼）。
+
+#### 定位页：`GET /sessions/{id}/messages?at=<cursor>`
+
+`at` 与 `before` 互斥（同时给返回 400）。返回以游标指向的行为**最新行**的一页（旧→新排序，与普通分页同序），`nextCursor` 指向本页最旧行。
+
+- **为什么要有**：命中消息通常**还没被前端加载**（首屏只取最近一页），用 `?before=` 一页页往前翻需要 O(页数) 次请求、最坏传几百 MB——不可接受。定位页一次查询解决。
+- **前端语义是「替换」窗口**（而非前插）：前插会让目标与已加载的新消息之间出现空洞，滚动位置计算随之失真；替换后「继续上翻加载更早」从该页最旧行接上。代价是**更新的消息不在窗口内**——故前端在替换期间提供「回到最新消息」出口（见 frontend.md）。
+
 #### 回写匹配语义：`POST /sessions/{id}/messages/sync`
 
 前端把重建（`replay_end`）或 cooked 的消息写回时，每条 payload 项**带不带 `id` 决定走哪条路径**——两者不可合并，因为前端消息的 id 有两个来源：hydrate 来的是真 DB 行 id，live/replay 自造的 `genId()` 在 DB 中不存在。

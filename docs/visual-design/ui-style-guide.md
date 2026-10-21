@@ -737,6 +737,22 @@ ACP 消息流里的 thought 块：一行可点标题 + 展开区。**思考内�
 
 
 
+### 7.12 聊天面板会话内搜索条（`.chat-search`，F06）
+
+搜索条是**延迟展开的内联浮层**（标题栏图标按钮 → 面板右上角浮出），不是弹窗——
+聊天面板没有 header 插槽，弹窗会遮住消息且与 Modal 基座的 focus trap 欠账纠缠。
+
+| 元素 | 规格 |
+|---|---|
+| 浮层本体 | 走 `.pixel-float`（2px 边框 + 4px 硬阴影，§6.1）；绝对定位挂在聊天面板根容器右上（`top: 34px; right: 8px`），`z-index: 30`——**面板浮层档**（与「上次输入」卡片 / 「回到底部」同档，低于 Modal 弹窗层 50，§6.4） |
+| 输入行 | `IconSearch`（§13.1 线性图标）+ 输入框（12px、1px `--border-strong`、focus 转 `--accent`）+ 关闭按钮（20×20） |
+| 结果行 | 「时刻（10px `--text-faint`）+ 命中片段（12px `--text-muted`，超宽 ellipsis）」；选中/hover 背景 `--accent-14` |
+| 命中词 | `.chat-search-mark`：底 `--accent-14`、字 `--accent`（与消息内高亮区分——这是检索结果的标记） |
+| 状态行 | 10px `--text-faint`：**命中数 + 预算说明**（被截断 / 命中过多 / 关键词被丢）必须写出来——静默截断会让用户以为搜全了，比搜不到更糟 |
+| 标题栏入口 | `.panel-title-bar-btn`（20×18，1px 浅色描边，木底浅字）；开启态 `.is-active` 换 accent 底 |
+| 「回到最新消息」 | `.panel-title-bar-text-btn`（10px 字，木底浅字小按钮）：定位页替换窗口期间出现——更新的消息不在窗口内，没有出口用户会卡在一段历史里 |
+| 定位闪烁 | 用户消息打在**气泡**上（`.chat-msg-flash`，既有机制）；助手消息没有单一气泡外壳（正文由多个 block 组成），ring 打在**行**上（`.chat-msg-row-flash`，不带气泡硬投影）。「指向某条消息」仍只有 `highlightedMessageId` 一条通道 |
+
 ## 8. Settings Toggles
 
 Effect toggles in the Settings panel, each persisted to localStorage（下表只列效果类开关，非全量）：

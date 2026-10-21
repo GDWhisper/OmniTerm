@@ -1,8 +1,79 @@
 # ACP 会话内搜索（会话级消息全文检索）
 
-> 状态：**设计稿**（2026-10-21）
+> 状态：**已实施**（2026-10-21）——实施偏差见 §0.2（D9 高亮只覆盖用户气泡、检索改两步实现、响应 camelCase、计划外补「回到最新消息」出口）
 > 触发条件：改 `chat_messages` 查询 / 分页游标、新增检索端点、动 `ChatView` 标题栏与消息定位链路前**必读**
 > 关联：`docs/dev/plans/2026-07-27-acp-session-enhancements.md` F06（本文是它的落地计划）、`docs/dev/plans/backlog/improvement-directions-remaining.md` X02（本文承担 X02 的「搜索」半边）、`docs/dev/performance-and-safety.md` §P1/§P4/§S1
+
+## 0. 实施记录（2026-10-21）
+
+### 0.1 落地文件
+
+| 文件 | 作用 |
+|---|---|
+| `src/acp/chat_persistence.rs` | `search_session_messages`（LIKE 匹配 + 双扫描预算 + 命中片段）+ `list_messages_page_at`（定位页）+ 预算常量（`MAX_SEARCH_ROWS` / `MAX_SEARCH_BYTES` / `MAX_SEARCH_TERMS` / `MAX_SEARCH_RESULTS`）；页收尾逻辑 `finalize_page` 与普通分页共用 |
+| `src/api/sessions.rs` | 新端点 `GET /sessions/{id}/messages/search`；`GET /sessions/{id}/messages` 增 `?at=<cursor>` 定位页参数（与 `before` 互斥） |
+| `frontend/src/utils/chatSearch.ts` | 检索调用层（类型 + 请求 + 命中词高亮切段） |
+| `frontend/src/components/Chat/ChatSearchBar.tsx` | 搜索条：延迟展开的内联浮层（输入 / 结果列表 / 键盘导航 / 预算状态行） |
+| `frontend/src/components/Chat/ChatView.tsx` | 标题栏搜索入口 + Ctrl+F；命中跳转（窗口内直跳 / 未加载则拉定位页替换窗口）+ 高亮闪烁 + 「回到最新消息」出口 |
+| `frontend/src/components/Chat/ChatMessage.tsx` | 助手消息行补 `chat-msg-row-flash`（助手消息没有单一气泡外壳，见 §0.2-1） |
+| `frontend/src/stores/chatStore.ts` | 新增 `replaceMessages`（窗口整体替换，D8） |
+| `frontend/src/hooks/useChatShortcuts.ts` | Ctrl/Cmd+F 接入（容器作用域，D11） |
+| `frontend/src/index.css` | `.chat-search*` / `.chat-msg-row-flash` / `.panel-title-bar-btn` / `.panel-title-bar-text-btn` |
+| `frontend/src/locales/{zh,en}/translation.json` | `chat.search.*`（12 个 key，两份同步） |
+
+### 0.2 实施偏差
+
+1. **D9 的高亮只覆盖用户气泡，助手消息另立一个 class**（唯一的机制偏差）。
+   D9 写「高亮复用 `highlightedMessageId` + `chat-msg-flash`」——但既有 `chat-msg-flash`
+   打在**用户气泡**上（`ChatMessage.tsx` 的 user 分支）；助手消息的正文是**多个 block
+   堆叠**（过程容器 + 结论气泡），没有单一气泡外壳可挂 ring。故助手消息改打**行**
+   （新增 `.chat-msg-row-flash`，ring 无气泡硬投影）。「指向某条消息」仍只有
+   `highlightedMessageId` 一条通道（D9 的核心不变）。
+2. **检索实现成两步（候选窗口 → 范围内 LIKE）**：计划写「Rust 侧累计字节触顶即停」，
+   实施时发现若一次性取回候选行的 `text` 本体，大会话会把几十 MB 文本搬进内存。
+   改为先只取 `(id, created_at, LENGTH(text))`（**不取文本本体**），在 Rust 侧累计字节
+   定出「参与检索的范围」，再在该范围内做 LIKE。两条查询都走
+   `idx_chat_messages_session(session_id, created_at)`，范围扫描有界。
+3. **响应字段 camelCase**（`#[serde(rename_all = "camelCase")]`）：与本仓其它 HTTP 响应
+   一致（`createdAt` / `nextCursor`）。**教训**：手工 `json!` 映射字段名会与结构体漂移
+   ——实施中第一版就是手工映射，输出成了 snake_case，前端按 camelCase 读会拿到
+   `undefined`；现改为直接序列化结构体。
+4. **计划外补充：「回到最新消息」出口**。D8 的定位页语义是**替换**窗口，目标成为窗口
+   最新行——于是**更新的消息不在窗口内**（这是定位页「一次查询取到目标」的必然代价：
+   任何有界的定位页都装不下从目标到最新的全部消息）。没有出口的话用户会卡在一段
+   历史里（「回到底部」只能回到这个窗口的底）。故标题栏在窗口被替换期间显示
+   「回到最新消息」，点击即重新拉最新一页并替换窗口。
+5. **结果条数上限取 100**（`MAX_SEARCH_RESULTS`，计划未给具体值）：命中过多时状态行
+   写明「仅显示前 N 条」，不静默丢。
+6. **Ctrl+F 再按一次 = 聚焦并全选**（FileEditor 同款口径）：搜索条已开着时再按 Ctrl+F
+   不清空查询，只把焦点拉回输入框。
+
+### 0.3 验收对照
+
+- [x] 在 50 条消息的会话里搜一个只出现在第 3 条的词 → **命中**（证明搜的是全库不是已加载页）
+      —— 后端单测直接对 DB 检索（不经前端窗口）；Chromium 实测命中的消息不在首屏窗口内也能搜到
+- [x] 搜中文子串「上下文」能命中「上下文窗口」（LIKE 天然支持，无分词问题）
+      —— 单测 `search_matches_chinese_substring_without_tokenizer`
+- [x] 多词空格分隔 = AND 语义 —— 单测 `search_multiple_terms_use_and_semantics`
+- [x] 搜含 `%` 或 `_` 的字面词不会变成通配符 —— 单测 `search_escapes_like_wildcards`
+- [x] 命中消息**未被加载过**时 → 自动拉定位页 → 滚动到该条 → 气泡闪烁
+      —— 组件测试「命中未加载 → 拉定位页替换窗口 → 目标气泡滚动并闪烁」
+- [x] 定位页替换后，向上滚动能继续加载更早的消息（`historyCursor` 正确）
+      —— 组件测试断言 `historyCursor` = 定位页的 `nextCursor`；后端单测 `location_page_contains_target_row_as_newest`
+- [x] 超行数/字节预算 → 结果面板**写明省略量**（不是静默截断）
+      —— 后端单测两个预算触顶用例（`truncated=true`）；前端状态行显示「仅搜索了最近 N 行」
+- [x] `system` 角色消息不出现在结果里 —— 单测 `search_excludes_system_rows`
+- [x] Ctrl+F 在聊天面板内打开搜索；文件编辑器内的 Ctrl+F 不受影响
+      —— 容器作用域绑定（`useChatShortcuts`），文件编辑器在编辑器容器内捕获阶段拦截
+- [x] 切换会话后搜索结果清空、输入框收起 —— 组件测试「切换会话后搜索条收起」
+- [x] `cd frontend && pnpm lint` / `pnpm exec tsc -b` / `pnpm test` 零新增警告
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` 零新增；`cargo test` 全绿
+      （新增后端单测 10 例、前端测试 18 例）
+
+**真实浏览器端到端**（Chromium + Playwright）：聊天面板标题栏搜索入口 → 展开搜索条 →
+输入「上下文」→ 命中 1 条（片段含高亮词，状态行「共 1 条匹配」）→ 点击命中 → 目标
+消息被闪烁标记并滚动到视野中央 ✓。定位页端点另经 `curl` 验证（含目标行、目标为
+页内最新、`nextCursor` 指向最旧行）✓。
 
 ## 1. 背景
 
@@ -105,18 +176,12 @@ backlog X02 原把它与「Markdown 导出」合为一项，但两者技术栈�
 
 ## 5. 验收标准
 
-- [ ] 在 50 条消息的会话里搜一个只出现在第 3 条的词 → **命中**（证明搜的是全库不是已加载页）
-- [ ] 搜中文子串「上下文」能命中「上下文窗口」（LIKE 天然支持，无分词问题）
-- [ ] 多词空格分隔 = AND 语义
-- [ ] 搜含 `%` 或 `_` 的字面词不会变成通配符
-- [ ] 命中消息**未被加载过**时 → 自动拉定位页 → 滚动到该条 → 气泡闪烁
-- [ ] 定位页替换后，向上滚动能继续加载更早的消息（`historyCursor` 正确）
-- [ ] 超行数/字节预算 → 结果面板**写明省略量**（不是静默截断）
-- [ ] `system` 角色消息不出现在结果里
-- [ ] Ctrl+F 在聊天面板内打开搜索；文件编辑器内的 Ctrl+F 不受影响
-- [ ] 切换会话后搜索结果清空、输入框收起
-- [ ] `cd frontend && pnpm lint` / `pnpm exec tsc -b` / `pnpm test` 零新增警告
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` 零新增；`cargo test --workspace` 全绿（新增端点与检索函数有单测）
+> 实施后的逐条对照见 §0.3（原验收清单已逐条勾验并附证据，此处不再重复）。
+>
+> 原始清单（2026-10-21 计划稿）：50 条消息的会话里搜第 3 条才出现的词要命中（证明
+> 搜的是全库）；中文子串要能命中；多词 AND；`%` / `_` 不当通配符；命中未加载的消息
+> 能自动定位并闪烁；定位页替换后仍能上翻加载更早；超预算要写明省略量；system 行不进
+> 结果；Ctrl+F 打开搜索；切会话清空结果；lint / tsc / test / clippy 零新增。
 
 ## 6. 风险与缓解
 
@@ -134,8 +199,9 @@ backlog X02 原把它与「Markdown 导出」合为一项，但两者技术栈�
 
 实施完成后需更新：
 
-- `docs/architecture/backend.md` — 新增检索端点与定位页参数；`chat_persistence` 的检索函数与预算常量
-- `docs/architecture/frontend.md` — `components/Chat/` 补 `ChatSearchBar.tsx`；聊天面板标题栏新增搜索入口
-- `docs/dev/plans/backlog/improvement-directions-remaining.md` — X02 拆为「搜索（F06，本文，已排期）」与「导出（F08，另立计划）」
-- `docs/dev/plans/2026-07-27-acp-session-enhancements.md` — F06 标注已实施 + 指向本文
-- `CHANGELOG.md` — **需加条目**
+- `docs/architecture/backend.md` — 新增检索端点与定位页参数；`chat_persistence` 的检索函数与预算常量 ✅
+- `docs/architecture/frontend.md` — `components/Chat/` 补 `ChatSearchBar.tsx`；聊天面板标题栏新增搜索入口；`utils/chatSearch.ts`；`chatStore.replaceMessages` ✅
+- `docs/visual-design/ui-style-guide.md` — 搜索条 / 标题栏按钮 / 行级闪烁的视觉规格 ✅
+- `docs/dev/plans/backlog/improvement-directions-remaining.md` — X02 拆为「搜索（F06，本文，已实施）」与「导出（F08，已实施）」✅
+- `docs/dev/plans/2026-07-27-acp-session-enhancements.md` — F06 标注已实施 + 指向本文 ✅
+- `CHANGELOG.md` — **需加条目** ✅

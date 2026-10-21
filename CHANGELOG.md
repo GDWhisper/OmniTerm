@@ -55,6 +55,8 @@ Prefix each entry with the area it affects:
 
 - (2026-10-21 09:30) `[frontend]` agent 回合结束 / 出错 / 需要审批时可弹**浏览器桌面通知**（OS 级 `Notification` API），设置入口在 设置 → 通知：通知**只含会话名与事件类型，不含 agent 回复正文**（OS 通知在锁屏明文显示，正文可能含代码/路径/凭据）；触发判据为「用户是否在眼前」（非当前会话，或当前会话但标签页已隐藏——用户切去了别的应用；只按「非当前会话」判会误杀主场景，因为 ACP 的 WebSocket 按会话建立、回合事件只在用户正看着该会话时到达）；桌面通知已启用且已授权时不再叠加 OmniTerm 自己的提示音（避免双响），站内提醒（侧栏红点 + 提示音 + 标签页标题闪烁）不受影响；多标签页同时打开同一会话时只弹一条（BroadcastChannel 先声明者发）；能力与权限态在设置里如实展示——主部署形态以明文 http 访问局域网 IP 时浏览器不提供该能力，开关置灰并写明原因，权限被拒则给出「重新请求」入口，杜绝「用户以为开了、其实没生效」；开关存 localStorage（通知权限是浏览器级状态，跨设备无法共享）（`frontend/src/utils/desktopNotification.ts`、`frontend/src/components/Attention/AttentionProvider.tsx`、`frontend/src/components/Settings/DesktopNotificationSection.tsx`）
 
+- (2026-10-21 10:40) `[backend]` `[frontend]` ACP 会话新增**会话内全文搜索**（Ctrl+F 或聊天面板标题栏的搜索入口）：搜的是**整个会话的消息库**（不是界面上已加载的那几页），命中未加载的消息时自动拉「定位页」把消息窗口整体替换到目标附近并滚动 + 气泡闪烁；关键词空格分隔为 AND 语义，中文子串直接命中（后端用 LIKE 而非 FTS5——实测会话量级下 LIKE 扫描已够快，FTS5 会让库涨约 6.7 倍），`%` `_` 等通配符按字面量匹配；检索有双扫描预算（行数 + 文本字节两个维度，任一触顶即停），**触顶时结果面板明确写明「仅搜索了最近 N 行」而不是静默截断**——静默截断会让用户以为搜全了，比搜不到更糟；定位页替换窗口后「更新的消息」不在窗口内，标题栏因此提供「回到最新消息」出口；检索只覆盖对话正文（不搜工具输出与思考块），系统内部事件不参与（`src/acp/chat_persistence.rs`、`src/api/sessions.rs`、`frontend/src/components/Chat/ChatSearchBar.tsx`、`frontend/src/components/Chat/ChatView.tsx`）
+
 ### Fixed
 
 - (2026-10-20 21:20) `[frontend]` 修复 ACP 一段运行过程未随工作块折叠：ACP 线格式的 `current_mode_update` 字段是 `currentModeId`，前端只认 `mode`，导致模式通知退化成独立 SYSTEM 消息、打断 assistant 尾部并把同一 turn 拆成多条消息；前一条消息最后一段 text 之后的思考/工具/权限块因此永远露在折叠容器外。现兼容 `currentModeId` / `current_mode_id` / `mode`，形状不认识时丢弃而非造 SYSTEM 消息；`turn_snapshot` 同时收编本轮所有 streaming 分身并落到末尾，避免旧分身成为孤儿段（`frontend/src/hooks/useAcpChat.ts`、`frontend/src/stores/chatStore.ts`）
