@@ -51,6 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-10-20 20:41) `[frontend]` FileManager 文件图标可拖拽到 ACP 输入框生成 `@工作区相对路径` 引用：复用 Pointer 拖拽（非 HTML5 DnD），支持多选文件；目录/工作区外/含空白或 `@` 的路径跳过并提示，按后端 8 条上限截断；拖拽期间输入框显示投放高亮（`frontend/src/components/FileManager/useFileDrag.ts`、`frontend/src/components/Chat/ChatInput.tsx`、`frontend/src/stores/chatStore.ts`）
 - (2026-10-20 04:26) `[frontend]` `[backend]` `[api]` GIT 面板补充提交详情文件列表与 HISTORY 过滤：commit 抽屉展示该提交变更的文件（状态字母/rename 原路径/截断提示，`git show --name-status`）；历史支持单文件（文件行时钟入口 + 可清除的路径 chip）与全分支（ALL 切换）过滤，`/git/log` 新增 `path`/`all` 参数（`src/git/repo.rs`、`src/api/git.rs`、`frontend/src/components/GitPanel/{GitPanel,FileSections,GitDrawer}.tsx`）
 - (2026-10-20 03:35) `[frontend]` `[backend]` `[api]` GIT 面板支持分支对比（range diff）：CHANGES 视图的 BASE 选择器切换为只读 `base...HEAD` 文件列表（rename 显示原路径，空态/截断提示），点文件查看只读 diff；新增 `GET /git/range`，以 merge-base 校验基线并复用 256KB 截断（`src/git/repo.rs`、`frontend/src/components/GitPanel/{GitPanel,FileSections,GitDrawer}.tsx`）
 - (2026-10-20 03:35) `[frontend]` `[backend]` `[api]` GIT 面板支持 merge/rebase 与统一中断态：分支行内「合并到当前分支」「变基到…」（变基二次确认并提示历史重写）；`/git/status` 新增 `in_progress`（merge/rebase/cherry-pick/revert/am，含冲突数，兼容 worktree），面板常驻横幅提供 CONTINUE（有冲突时禁用）/ABORT（二次确认）；新增 `POST /git/merge|rebase|operation/continue|operation/abort`，continue 不拉起交互编辑器（`src/git/repo.rs`、`src/api/git.rs`、`frontend/src/components/GitPanel/OperationBanner.tsx`）

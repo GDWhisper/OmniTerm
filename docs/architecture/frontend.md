@@ -246,6 +246,16 @@ This split serves three purposes:
 3. Phase 4b's `PermissionModal` can plug into the same store without
    rewriting connection code.
 
+### 文件拖拽 → @ 引用（pendingMention）
+
+FileManager 的文件图标通过 `useFileDrag` 的 Pointer 拖拽落到 ChatInput
+（`data-at-mention-drop="true"`）时不会移动文件，也不走 HTML5 DnD：FileManager 过滤出
+`File`/`SymlinkFile` 后调用 `chatStore.requestMention(sessionId, absPaths)`；ChatInput 用
+`consumeMention(sessionId)` 原子消费，按 `session.workspace_path` 转相对路径
+（`utils/path.ts::relativeToWorkspace`），过滤含空白/`@` 的路径并按后端
+`MAX_AT_REFERENCES=8` 截断，插入到最后光标或活跃 `@token`（从未聚焦则追加到末尾）。
+`pendingInsert`（整段替换）语义不变。仅桌面/平板可用；移动端 Files/Chat 分 pane。
+
 ### Queued follow-up (N=1 single slot)
 
 While the agent is busy (`sending: true`), the input box stays editable.

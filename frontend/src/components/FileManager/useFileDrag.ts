@@ -37,6 +37,19 @@ interface DragState {
 
 const CODE_EXTS = new Set(['.ts', '.tsx', '.rs', '.js', '.py', '.go', '.c', '.h'])
 
+/** 松手后抑制一次合成 click，防止触摸/浏览器把落点上的按钮（如 Send）当成点击。 */
+const DRAG_CLICK_SUPPRESS_MS = 350
+
+/** 指针下方元素栈（优先 elementsFromPoint，jsdom 等环境回退 elementFromPoint）。 */
+function elementsUnderPointer(x: number, y: number): Element[] {
+  if (typeof document.elementsFromPoint === 'function') {
+    return document.elementsFromPoint(x, y)
+  }
+  const el =
+    typeof document.elementFromPoint === 'function' ? document.elementFromPoint(x, y) : null
+  return el ? [el] : []
+}
+
 function entryIcon(entry: FileEntry): 'folder' | 'file' | 'code' {
   if (entry.path_type === 'Dir' || entry.path_type === 'SymlinkDir') return 'folder'
   const dot = entry.name.lastIndexOf('.')
@@ -50,6 +63,8 @@ interface UseFileDragOptions {
   fmSource: FmSource | null
   activeProjectId: string | null
   onMoveComplete: () => void
+  /** 拖到 `[data-at-mention-drop="true"]` 区域松手时回调绝对路径；不执行移动。 */
+  onDropAtMention?: (paths: string[]) => void
   /** 真实滚动容器（.fm-table-scroll）；缺省回退 tableWrapRef。 */
   scrollRef?: React.RefObject<HTMLDivElement | null>
 }
@@ -88,6 +103,33 @@ export function useFileDrag(opts: UseFileDragOptions) {
     if (!el) return null
     const target = el.closest('[data-drop-path]')
     return target?.getAttribute('data-drop-path') ?? null
+  }, [])
+
+  const isOverAtMentionTarget = useCallback((x: number, y: number): boolean =>
+    elementsUnderPointer(x, y).some(
+      (el) => el.closest('[data-at-mention-drop="true"]') !== null,
+    ), [])
+
+  /**
+   * 松手后吞掉紧随其后的一次 click。指针拖拽本身不派发 click，但触摸设备
+   * 会在落点合成一次——若落点是 ChatInput 的 Send 按钮，会把「拖文件」误变成「发送」。
+   */
+  const suppressNextClick = useCallback(() => {
+    let done = false
+    let timer = 0
+    const onClick = (e: MouseEvent) => {
+      if (done) return
+      done = true
+      e.preventDefault()
+      e.stopPropagation()
+      finish()
+    }
+    const finish = () => {
+      if (timer) window.clearTimeout(timer)
+      window.removeEventListener('click', onClick, true)
+    }
+    window.addEventListener('click', onClick, true)
+    timer = window.setTimeout(finish, DRAG_CLICK_SUPPRESS_MS)
   }, [])
 
   const autoScroll = useCallback((y: number) => {
@@ -162,6 +204,16 @@ export function useFileDrag(opts: UseFileDragOptions) {
     document.removeEventListener('pointercancel', handlePointerCancel)
 
     if (ds.phase === 'active') {
+      const mentionDrop = optsRef.current.onDropAtMention
+      if (mentionDrop && isOverAtMentionTarget(e.clientX, e.clientY)) {
+        const paths = ds.paths
+        cleanup()
+        suppressNextClick()
+        setTimeout(() => { suppressClick.current = false }, 0)
+        mentionDrop(paths)
+        return
+      }
+
       const target = findDropTarget(e.clientX, e.clientY)
       const { cwd: curCwd, fmSource: src, activeProjectId: pid } = optsRef.current
 
@@ -187,7 +239,7 @@ export function useFileDrag(opts: UseFileDragOptions) {
 
     cleanup()
     setTimeout(() => { suppressClick.current = false }, 0)
-  }, [handlePointerMove, findDropTarget, cleanup, addToast, t])
+  }, [handlePointerMove, findDropTarget, isOverAtMentionTarget, cleanup, addToast, t, suppressNextClick])
 
   const handlePointerCancel = useCallback((e: PointerEvent) => {
     const ds = dragRef.current

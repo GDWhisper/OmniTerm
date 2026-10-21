@@ -4,9 +4,18 @@ import { READER_FONT } from '../../utils/fonts'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { useChatStore, readQueuedFromStorageForSession, type SlashCommand } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
+import { useToastStore } from '../../stores/toastStore'
 import { getDraft, saveDraft, deleteDraft } from '../../utils/chatDraft'
 import { api, type FileEntry } from '../../api/client'
-import { findAtToken, replaceAtToken, type AtToken } from '../../utils/atReference'
+import {
+  findAtToken,
+  insertAtReferences,
+  isAtReferenceSafePath,
+  MAX_AT_REFERENCES,
+  replaceAtToken,
+  type AtToken,
+} from '../../utils/atReference'
+import { relativeToWorkspace } from '../../utils/path'
 import {
   processImageFile,
   extractImageFiles,
@@ -41,6 +50,8 @@ interface ChatInputProps {
   imageSupported?: boolean
   /** Agent 是否声明支持 embeddedContext（§8：未声明则置灰文件卡片）。 */
   fileSupported?: boolean
+  /** 当前 ACP 会话的工作区根：拖拽文件生成的 @ 引用以此转相对路径。 */
+  workspacePath?: string
 }
 
 const QUEUE_PREVIEW_CHARS = 40
@@ -72,8 +83,10 @@ export function ChatInput({
   commands = [],
   imageSupported = false,
   fileSupported = false,
+  workspacePath,
 }: ChatInputProps) {
   const { t } = useTranslation()
+  const addToast = useToastStore((s) => s.addToast)
   // 移动端无物理键盘：水印里的 Enter/Shift+Enter 提示是桌面专属操作，换成中性文案。
   const isMobile = useAppStore((s) => s.isMobile)
   const [text, setText] = useState(() => getDraft(sessionId) || '')
@@ -93,18 +106,29 @@ export function ChatInput({
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
   const fileItemRefs = useRef<(HTMLButtonElement | null)[]>([])
   const atCursorRef = useRef(0)
+  /** 是否真正定位过光标：从未聚焦时拖入引用应追加到草稿末尾，而不是插到 0。 */
+  const caretTouchedRef = useRef(false)
   const attachErrorTimerRef = useRef<number | null>(null)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
+  // 程序化改写输入框不会触发 onChange/onSelect，光标必须由写入方同步；
+  // `touched=false` 用于切会话/发送后的全新草稿（拖入引用应追加到末尾）。
+  const writeText = useCallback((next: string, caret: number, touched = true) => {
+    setText(next)
+    atCursorRef.current = caret
+    caretTouchedRef.current = touched
+  }, [])
+
   // D7「引用到输入框」通道：动作写入 pendingInsert，本组件按 sessionId 消费。
   // 订阅而非 getState：挂载时若已有未消费值（跨会话切换），effect 能读到。
   const pendingInsert = useChatStore((s) => s.pendingInsert)
+  const pendingMention = useChatStore((s) => s.pendingMention)
 
   useEffect(() => {
     if (!pendingInsert || pendingInsert.sessionId !== sessionId) return
     const quote = pendingInsert.text
-    setText(quote)
+    writeText(quote, quote.length)
     useChatStore.getState().consumeInsert()
     textareaRef.current?.focus()
     // 光标置末尾：引用块应可直接继续输入追问
@@ -113,7 +137,7 @@ export function ChatInput({
       const len = quote.length
       requestAnimationFrame(() => el.setSelectionRange(len, len))
     }
-  }, [pendingInsert, sessionId])
+  }, [pendingInsert, sessionId, writeText])
 
   // Persist unsent text per session and restore when switching back.
   const prevSessionIdRef = useRef(sessionId)
@@ -124,7 +148,8 @@ export function ChatInput({
         saveDraft(prevSessionIdRef.current, text)
       }
       prevSessionIdRef.current = sessionId
-      setText(getDraft(sessionId))
+      const next = getDraft(sessionId)
+      writeText(next, next.length, false)
       setAttachments([])
       setFiles([])
       setDrawerOpen(false)
@@ -143,7 +168,7 @@ export function ChatInput({
     } else {
       deleteDraft(sessionId)
     }
-  }, [sessionId, text])
+  }, [sessionId, text, writeText])
 
   // Hydrate queued message from sessionStorage on session switch / F5. The
   // sessionStorage cache survives page refreshes within the same tab (per Q6);
@@ -195,6 +220,7 @@ export function ChatInput({
   const updateAtToken = (el: HTMLTextAreaElement) => {
     const pos = el.selectionStart ?? el.value.length
     atCursorRef.current = pos
+    caretTouchedRef.current = true
     const token = findAtToken(el.value, pos)
     setAtToken(token)
     if (token === null) setAtDismissedStart(null)
@@ -249,7 +275,7 @@ export function ChatInput({
   const selectFile = (relPath: string) => {
     if (!atToken) return
     const { text: next, cursor } = replaceAtToken(text, atToken.start, atCursorRef.current, relPath)
-    setText(next)
+    writeText(next, cursor)
     setAtToken(null)
     const el = textareaRef.current
     if (el) {
@@ -257,6 +283,51 @@ export function ChatInput({
       requestAnimationFrame(() => el.setSelectionRange(cursor, cursor))
     }
   }
+
+  // 文件拖拽通道：绝对路径 → 工作区相对路径；目录/工作区外/含空白或 @ 的路径跳过。
+  const insertMentionPaths = useCallback((paths: string[]) => {
+    const el = textareaRef.current
+    const currentText = el?.value ?? text
+    const rawCaret = caretTouchedRef.current ? atCursorRef.current : currentText.length
+    const caret = Math.max(0, Math.min(rawCaret, currentText.length))
+    const token = findAtToken(currentText, caret)
+    const start = token ? token.start : caret
+
+    const relPaths: string[] = []
+    let skipped = 0
+    for (const absPath of paths) {
+      if (relPaths.length >= MAX_AT_REFERENCES) {
+        skipped += 1
+        continue
+      }
+      const rel = relativeToWorkspace(absPath, workspacePath)
+      if (rel === null || !isAtReferenceSafePath(rel)) {
+        skipped += 1
+        continue
+      }
+      if (!relPaths.includes(rel)) relPaths.push(rel)
+    }
+    if (skipped > 0) {
+      addToast('warning', t('chat.input.atDropSkipped', { count: skipped }))
+    }
+    if (relPaths.length === 0) return
+
+    const { text: next, cursor } = insertAtReferences(currentText, start, caret, relPaths)
+    writeText(next, cursor)
+    setAtToken(null)
+    setAtDismissedStart(null)
+    el?.focus()
+    requestAnimationFrame(() => el?.setSelectionRange(cursor, cursor))
+  }, [text, workspacePath, addToast, t, writeText])
+
+  useEffect(() => {
+    if (!pendingMention || pendingMention.sessionId !== sessionId) return
+    // 原子消费：StrictMode 下 effect 会跑两次，只有第一次能拿到 paths。
+    const paths = useChatStore.getState().consumeMention(sessionId)
+    if (!paths || paths.length === 0) return
+    if (disabled) return
+    insertMentionPaths(paths)
+  }, [pendingMention, sessionId, disabled, insertMentionPaths])
 
   const hasAttachments = attachments.length > 0 || files.length > 0
   const canSend = !disabled && !sending && (text.trim().length > 0 || hasAttachments)
@@ -358,7 +429,7 @@ export function ChatInput({
       attachments.length > 0 ? attachments : undefined,
       files.length > 0 ? files : undefined,
     )
-    setText('')
+    writeText('', 0, false)
     setAttachments([])
     setFiles([])
     deleteDraft(sessionId)
@@ -431,7 +502,8 @@ export function ChatInput({
   }
 
   const selectCommand = (cmd: SlashCommand) => {
-    setText('/' + cmd.name + ' ')
+    const next = `/${cmd.name} `
+    writeText(next, next.length)
     setShowCommands(false)
     textareaRef.current?.focus()
   }
@@ -452,7 +524,7 @@ export function ChatInput({
   // 文本出现在输入框，可继续编辑后 send（idle）或 queue（busy）。
   const handleClickEditQueued = () => {
     if (!queuedMessage) return
-    setText(queuedMessage)
+    writeText(queuedMessage, queuedMessage.length)
     setShowCommands(false)
     onCancelQueued()
     textareaRef.current?.focus()
@@ -488,6 +560,8 @@ export function ChatInput({
 
   return (
     <div
+      className="chat-input"
+      data-at-mention-drop={disabled ? undefined : 'true'}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       style={{
@@ -887,7 +961,11 @@ export function ChatInput({
             updateAtToken(e.currentTarget)
           }}
           onSelect={(e) => updateAtToken(e.currentTarget)}
-          onBlur={() => setAtToken(null)}
+          onBlur={(e) => {
+            atCursorRef.current = e.currentTarget.selectionStart ?? atCursorRef.current
+            caretTouchedRef.current = true
+            setAtToken(null)
+          }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={t(isMobile ? 'chat.input.placeholderMobile' : 'chat.input.placeholder')}

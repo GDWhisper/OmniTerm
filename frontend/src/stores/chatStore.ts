@@ -451,6 +451,10 @@ interface ChatActions {
   requestInsert: (sessionId: string, text: string) => void
   /** 消费 pendingInsert（ChatInput 用掉后立即清空，避免切会话后旧引用复活）。 */
   consumeInsert: () => void
+  /** 文件拖拽到输入框：写入待插入的 @ 引用绝对路径（空数组 no-op）。 */
+  requestMention: (sessionId: string, paths: string[]) => void
+  /** 原子消费 pendingMention：匹配 sessionId 时取出并清空，否则返回 null。 */
+  consumeMention: (sessionId: string) => string[] | null
   markEnded: (sessionId: string) => void
   clearEnded: (sessionId: string) => void
   /** 审批入队（upsert）：id 已存在则原位替换（重放/重发不产生重复项），否则追加。 */
@@ -676,6 +680,11 @@ interface ChatStoreState {
    * 是「注入输入框」的显式信号，不是会话状态的一部分。
    */
   pendingInsert: { sessionId: string; text: string } | null
+  /**
+   * 文件拖拽到输入框：待插入的 @ 引用绝对路径。与 pendingInsert 同为顶层一次性
+   * 信号；ChatInput 通过 `consumeMention` 原子消费，防 StrictMode effect 双跑重复插入。
+   */
+  pendingMention: { sessionId: string; paths: string[] } | null
 }
 
 type ChatStore = ChatStoreState & ChatActions
@@ -1036,9 +1045,10 @@ const applyTopLevelActions = (
   return next
 }
 
-export const useChatStore = create<ChatStore>((set) => ({
+export const useChatStore = create<ChatStore>((set, getStore) => ({
   states: {},
   pendingInsert: null,
+  pendingMention: null,
 
   appendChunk: (sessionId, chunk) =>
     set((state) => {
@@ -1577,6 +1587,18 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   consumeInsert: () =>
     set({ pendingInsert: null }),
+
+  requestMention: (sessionId, paths) => {
+    if (paths.length === 0) return
+    set({ pendingMention: { sessionId, paths: [...paths] } })
+  },
+
+  consumeMention: (sessionId) => {
+    const pending = getStore().pendingMention
+    if (!pending || pending.sessionId !== sessionId) return null
+    set({ pendingMention: null })
+    return pending.paths
+  },
 }))
 
 export const selectChatState = (sessionId: string | null) => (s: ChatStore) =>

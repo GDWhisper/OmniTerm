@@ -314,6 +314,40 @@
 
 ---
 
+## 跨组件指针拖拽投放区 (pointer drop-target convention)
+
+**适用场景**：把某个组件的行/图标拖到另一个组件的投放区执行非移动动作
+（当前案例：FileManager 文件图标 → ACP ChatInput 插入 `@工作区相对路径`）。
+仍然**禁用 HTML5 DnD**（触摸设备不派发），沿用 `useFileDrag` 的 Pointer Events。
+
+**契约**：
+- 投放区用 `data-at-mention-drop="true"` 标记（仅可用态渲染）；`useFileDrag` 在 pointerup
+  时用 `document.elementsFromPoint` 扫描 mention 目标，命中则调用 `onDropAtMention(paths)`
+  并跳过 `data-drop-path` 移动逻辑；未命中才走原移动分支。
+- 发送方负责类型过滤与通道写入：FileManager 用完整 `files` 数组（非虚拟窗口）把绝对路径
+  映射为 `path_type`，仅保留 `File`/`SymlinkFile`，目录/未知路径跳过并 toast；随后调用
+  `chatStore.requestMention(sessionId, absPaths)`。
+- 接收方用**原子** `consumeMention(sessionId)` 消费（匹配才取出并清空，返回 paths）——不要用
+  「订阅 → 读值 → 清空」三步式，StrictMode effect 双跑会重复插入。
+- 路径在接收方归一：绝对路径 → 以 `sessions.workspace_path` 为基准的相对路径
+  （`utils/path.ts::relativeToWorkspace`）；工作区外、含空白/`@`、目录一律拒绝（后端 `@`
+  解析失败只留 debug 日志，前端不能静默放行）。前端按后端 `MAX_AT_REFERENCES=8` 截断。
+- 插入点用最后折叠光标（blur 前保存）；从未聚焦过则追加到草稿末尾；光标处有活跃 `@token`
+  时替换 token（`utils/atReference.ts::insertAtReferences`）。
+- 拖拽激活后松手要安装一次性 capture `click` 抑制（~350ms）：触摸浏览器会在落点合成 click，
+  可能误触投放区里的按钮（如 Send）。
+- 视觉：`body.fm-dragging` 期间投放区 `:hover` 显示 2px dashed `--accent` + 淡蓝 tint +
+  `cursor: copy`，radius 0（与 `.fm-drag-over` 同一语言，见 ui-style-guide §7.7.1）。
+
+**已有案例**：FileManager → ACP ChatInput @ 引用（2026-10-20）。
+
+**收益**：鼠标/触摸同一路径；不暴露/猜测 OS 文件路径；拒绝项有 toast，不会产生「插入了但
+后端没读到」的假成功。
+**代价**：跨组件依赖 zustand 通道与 DOM 标记；移动端 Files/Chat 分 pane，仅桌面/平板可用
+（键盘等价入口是既有 `@` 补全）。
+
+---
+
 ## 大列表虚拟滚动 (virtualized-table convention)
 
 **适用场景**：条目数可能上千的表格/列表。阈值以下全量渲染；超过阈值只渲染

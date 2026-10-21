@@ -115,6 +115,32 @@ Sidebar 底部书本图标按钮 → 弹出 tmux 速查面板。**已完成数�
 
 **改拖拽行为的标准路径**：插入判定/顺序 → `projectReorder.ts`；手势与视觉反馈 → `Sidebar.tsx` + `index.css`；持久化契约 → `src/api/projects.rs`（前后端必须同步：前端发全量 id，后端按集合一致性校验）。**不要改用 HTML5 DnD**（触摸设备不派发，见 frontend-patterns 该条约定的取舍记录）；**不要加回独立手柄**（常驻视觉噪音，长按起拖是维护者拍板的交互）。
 
+## FileManager → ChatInput @ 拖拽
+
+文件管理器行图标拖到 ACP 输入框时插入 `@工作区相对路径`（不是移动文件、不是附件）。
+
+- `frontend/src/components/FileManager/useFileDrag.ts` — 手势与投放判定：Pointer Events
+  状态机、`onDropAtMention`、`elementsFromPoint` 先判 mention 再判 `data-drop-path`、松手后
+  一次性 click 抑制。
+- `frontend/src/components/FileManager/FileManager.tsx` — `handleDropToChat`：用完整 `files`
+  数组过滤 `File`/`SymlinkFile`，目录/未知路径 toast；把绝对路径写入
+  `useChatStore.getState().requestMention(...)`。
+- `frontend/src/stores/chatStore.ts` — 顶层 `pendingMention` + `requestMention` +
+  **原子** `consumeMention(sessionId)`（防 StrictMode 重复插入）；不要复用 `pendingInsert`
+  （整段替换语义）。
+- `frontend/src/components/Chat/ChatInput.tsx` — `workspacePath` prop、最后光标跟踪、
+  `insertMentionPaths`（相对化/过滤/8 条上限/`@token` 替换/追加末尾）、投放区标记
+  `data-at-mention-drop`。
+- `frontend/src/utils/path.ts` — `relativeToWorkspace`；`frontend/src/utils/atReference.ts` —
+  `insertAtReferences` / `isAtReferenceSafePath` / `MAX_AT_REFERENCES`。
+- `frontend/src/index.css` — `body.fm-dragging .chat-input[data-at-mention-drop]` 投放态；
+  两个 `translation.json` 的 `chat.input.atDropSkipped`。
+- 测试：`useFileDrag.mention.test.tsx`（stub `document.elementFromPoint` + PointerEvent）、
+  `ChatInput.test.tsx` 的 mention describe、`atReference/path` 纯函数测试。
+
+**不要**改回 HTML5 DnD；**不要**放行工作区外/含空白或 `@` 的路径（后端会静默跳过）；
+**不要**把目录当作可引用项。
+
 ## ChatView 滚动与浏览位置记忆
 
 改 ACP 聊天的滚动 / 贴底 / 浏览位置行为前必读。完整约定在 `docs/architecture/frontend.md`「ACP Chat View」节的「贴底跟随」与「浏览位置临时记忆」两条，这里只列文件与最易踩的点：

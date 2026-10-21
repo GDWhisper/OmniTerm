@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { api, type Session } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
+import { useChatStore } from '../../stores/chatStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
 import { useTerminalEngine } from '../../hooks/useTerminalEngine'
 import { isOutsideSkipped, markOutsideSkipped } from '../../utils/fmOutsideSkip'
@@ -400,6 +401,26 @@ export function FileManager() {
     }
   }
 
+  // 拖到 ChatInput：只接受文件（目录的 @ 引用会被后端静默跳过），绝对路径交给
+  // ChatInput 按 session workspace_path 转相对路径。
+  const handleDropToChat = useCallback((paths: string[]) => {
+    if (!activeSessionId) return
+    const typeByPath = new Map(
+      files.map((f) => [joinPath(cwd, f.rel_path ?? f.name), f.path_type]),
+    )
+    const filePaths: string[] = []
+    let skipped = 0
+    for (const path of paths) {
+      const type = typeByPath.get(path)
+      if (type === 'File' || type === 'SymlinkFile') filePaths.push(path)
+      else skipped += 1
+    }
+    if (skipped > 0) addToast('warning', t('chat.input.atDropSkipped', { count: skipped }))
+    if (filePaths.length > 0) {
+      useChatStore.getState().requestMention(activeSessionId, filePaths)
+    }
+  }, [activeSessionId, files, cwd, addToast, t])
+
   const {
     handlePointerDown: handleFileDragStart,
     preview: dragPreview,
@@ -410,6 +431,7 @@ export function FileManager() {
   } = useFileDrag({
     cwd, selected, fmSource, activeProjectId,
     onMoveComplete: () => fetchFiles(),
+    onDropAtMention: handleDropToChat,
     scrollRef: fileListScrollRef,
   })
 

@@ -336,6 +336,7 @@
   "chat.input.attachFileHint": "Pick any file",
   "chat.input.attachFileUnsupported": "This agent does not accept file attachments",
   "chat.input.atNoResults": "No matching files",
+  "chat.input.atDropSkipped": "{{count}} item(s) were not added as references (only files inside the workspace are supported).",
   "chat.input.message.undelivered": "not delivered — connection lost",
   "chat.msg.expand": "expand",
   "chat.msg.collapse": "collapse",

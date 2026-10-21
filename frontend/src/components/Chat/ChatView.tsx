@@ -1181,6 +1181,7 @@ export function ChatView() {
           commands={chatState.commands}
           imageSupported={chatState.imageSupported}
           fileSupported={chatState.embeddedContextSupported}
+          workspacePath={activeSession?.workspace_path}
         />
       </div>
 

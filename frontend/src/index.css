@@ -653,6 +653,17 @@ html, body, #root {
   background: rgba(88, 166, 255, 0.04);
 }
 
+/* FileManager 文件拖到 ACP 输入框：松手会插入 @ 引用（不是移动文件） */
+body.fm-dragging .chat-input[data-at-mention-drop="true"]:hover {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  background: rgba(88, 166, 255, 0.06) !important;
+}
+body.fm-dragging .chat-input[data-at-mention-drop="true"]:hover,
+body.fm-dragging .chat-input[data-at-mention-drop="true"]:hover * {
+  cursor: copy !important;
+}
+
 /* ── Drag overlay ── */
 .fm-drag-overlay {
   position: absolute;

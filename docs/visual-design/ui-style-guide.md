@@ -583,6 +583,17 @@ assistant 气泡正文是 react-markdown 渲染，**必须自带一套排版规�
 
 **「in hand」语义**：被拽起的卡保持完全不透明（不是半透明置灰）+ 跟随指针——用户清楚地看见「哪张卡被我捏在手里、此刻在哪」；插入线回答「松手会落到哪」。松手时行内 transform 清空（React 不管该属性，须手动），卡片落定新序。
 
+### 7.7.1 文件拖入 ACP 输入框（投放态）
+
+FileManager 文件图标拖到 ChatInput 上时，整个输入容器是投放区（交互契约见
+frontend-patterns「跨组件指针拖拽投放区」）：
+
+| 元素 | 规格 |
+|---|---|
+| 容器 | `outline: 2px dashed var(--accent); outline-offset: -2px;` + `background: rgba(88,166,255,0.06) !important;`（与 `.fm-drag-over` 同一语言，覆盖根节点 inline 背景）；radius 0 |
+| 光标 | `cursor: copy !important`（覆盖 `body.fm-dragging *` 的 grabbing，含子元素） |
+| 文案 | 无额外浮层；松手插入 `@路径`，被拒绝项由 warning toast 告知，不新增输入框内占位文案 |
+
 ### 7.8 聊天气泡像素卡片（`.chat-bubble`）
 
 ACP 聊天流的「说话气泡」（user + assistant 正文）统一为像素卡片，圆角一律 0（§14 全局硬角）。

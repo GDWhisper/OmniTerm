@@ -336,6 +336,7 @@
   "chat.input.attachFileHint": "选择任意文件",
   "chat.input.attachFileUnsupported": "当前 agent 不支持文件附件",
   "chat.input.atNoResults": "没有匹配的文件",
+  "chat.input.atDropSkipped": "{{count}} 个文件未能添加引用（仅支持工作区内的文件）",
   "chat.input.message.undelivered": "未送达——连接已断开",
   "chat.msg.expand": "展开",
   "chat.msg.collapse": "收起",
