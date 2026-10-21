@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
-import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock, SystemBlockDetail } from '../../stores/chatStore'
+import type { ChatMessage, ContentBlock, ImageBlock, ToolCallBlock, PlanBlock, SystemBlockDetail } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
 import { useStickScroll } from '../../hooks/useStickScroll'
 import { useLongPress } from '../../hooks/useLongPress'
@@ -26,7 +26,8 @@ import { hapticTap } from '../../utils/haptics'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
 import { IconCopy } from '../FileManager/icons'
-import { imageSrc } from '../../utils/imageAttachment'
+import { imageFullSrc, imageSrc } from '../../utils/imageAttachment'
+import { Modal } from '../Modal/Modal'
 import { formatFileSize } from '../../utils/fileAttachment'
 import { IconFile } from '../FileManager/icons'
 
@@ -1017,6 +1018,9 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   const [hovered, setHovered] = useState(false)
   // 移动端长按动作菜单锚点（D3）
   const [actionMenu, setActionMenu] = useState<ActionMenuPosition | null>(null)
+  // 用户消息附件：点击气泡缩略图 → 大图预览（Modal portal）。
+  const [previewImage, setPreviewImage] = useState<ImageBlock | null>(null)
+  const closeImagePreview = useCallback(() => setPreviewImage(null), [])
   const isMobile = useAppStore((s) => s.isMobile)
 
   // 组装动作 handlers（D2）：copy/quote/regenerate 由 ChatView 注入稳定回调。
@@ -1214,18 +1218,33 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
                 return (
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: message.text ? 6 : 0 }}>
                     {images.map((img, i) => (
-                      <img
+                      <button
                         key={i}
-                        src={imageSrc(img)}
-                        alt=""
+                        type="button"
+                        onClick={() => setPreviewImage(img)}
+                        title={t('chat.msg.imagePreview')}
+                        aria-label={t('chat.msg.imagePreview')}
                         style={{
-                          maxWidth: 240,
-                          maxHeight: 200,
-                          borderRadius: 0,
-                          border: '1px solid var(--border-subtle)',
                           display: 'block',
+                          padding: 0,
+                          border: 'none',
+                          background: 'none',
+                          cursor: 'zoom-in',
+                          lineHeight: 0,
                         }}
-                      />
+                      >
+                        <img
+                          src={imageSrc(img)}
+                          alt=""
+                          style={{
+                            maxWidth: 240,
+                            maxHeight: 200,
+                            borderRadius: 0,
+                            border: '1px solid var(--border-subtle)',
+                            display: 'block',
+                          }}
+                        />
+                      </button>
                     ))}
                     {/* 文件只落元数据：历史里以文件名 chip 还原「当时发了什么」，内容不可回看 */}
                     {files.map((f, i) => (
@@ -1277,6 +1296,27 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
           menu={actionMenu}
           onCloseMenu={closeActionMenu}
         />
+        {previewImage && (
+          <Modal
+            open
+            onClose={closeImagePreview}
+            title={t('chat.msg.imagePreview')}
+            maxWidth="max-w-5xl"
+          >
+            <img
+              src={imageFullSrc(previewImage)}
+              alt=""
+              style={{
+                display: 'block',
+                margin: '0 auto',
+                maxWidth: '100%',
+                maxHeight: '75vh',
+                objectFit: 'contain',
+                background: 'var(--bg-base)',
+              }}
+            />
+          </Modal>
+        )}
       </div>
     )
   }

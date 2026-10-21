@@ -341,6 +341,7 @@
   "chat.msg.expand": "展开",
   "chat.msg.collapse": "收起",
   "chat.msg.openFile": "在文件管理器中打开",
+  "chat.msg.imagePreview": "图片预览",
   "chat.msg.workTime": "已工作 {{dur}}",
   "chat.msg.endedAt": "结束于 {{time}}",
   "chat.process.collapsed": "过程",

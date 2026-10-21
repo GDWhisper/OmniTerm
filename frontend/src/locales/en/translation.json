@@ -341,6 +341,7 @@
   "chat.msg.expand": "expand",
   "chat.msg.collapse": "collapse",
   "chat.msg.openFile": "open in file manager",
+  "chat.msg.imagePreview": "Image preview",
   "chat.msg.workTime": "Worked {{dur}}",
   "chat.msg.endedAt": "Ended at {{time}}",
   "chat.process.collapsed": "Process",

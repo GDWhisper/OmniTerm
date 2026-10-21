@@ -47,6 +47,14 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- (2026-10-20 21:20) `[frontend]` 修复 ACP 一段运行过程未随工作块折叠：ACP 线格式的 `current_mode_update` 字段是 `currentModeId`，前端只认 `mode`，导致模式通知退化成独立 SYSTEM 消息、打断 assistant 尾部并把同一 turn 拆成多条消息；前一条消息最后一段 text 之后的思考/工具/权限块因此永远露在折叠容器外。现兼容 `currentModeId` / `current_mode_id` / `mode`，形状不认识时丢弃而非造 SYSTEM 消息；`turn_snapshot` 同时收编本轮所有 streaming 分身并落到末尾，避免旧分身成为孤儿段（`frontend/src/hooks/useAcpChat.ts`、`frontend/src/stores/chatStore.ts`）
+- (2026-10-20 20:59) `[frontend]` ACP 输入框未发送的图片 / 文件附件在切换会话后不再丢失：附件草稿按会话存入有界内存缓存（8 会话 / 32 MiB LRU），切回即恢复、发送即清、刷新即清；文字草稿仍走 sessionStorage（`frontend/src/utils/chatAttachmentDraft.ts`、`frontend/src/components/Chat/ChatInput.tsx`）
+- (2026-10-20 20:59) `[frontend]` 已发送图片可点击气泡缩略图打开大图预览（Modal，Esc / 遮罩关闭）：live 消息显示原图，历史消息按落库策略显示缩略图（`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/utils/imageAttachment.ts`）
+
 ## [0.3.4] - 2026-10-20
 
 ### Added

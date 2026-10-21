@@ -4,6 +4,7 @@ import {
   dataUrlToAttachment,
   isImageMime,
   imageSrc,
+  imageFullSrc,
   extractImageFiles,
   ImageAttachmentError,
 } from './imageAttachment'
@@ -55,6 +56,13 @@ describe('imageSrc', () => {
   it('falls back to the original when there is no thumbnail', () => {
     const att = { mimeType: 'image/png', data: TINY_PNG_BASE64 }
     expect(imageSrc(att)).toBe(`data:image/png;base64,${TINY_PNG_BASE64}`)
+  })
+})
+
+describe('imageFullSrc', () => {
+  it('uses data (the original) even when a thumbnail exists', () => {
+    const att = { mimeType: 'image/png', data: TINY_PNG_BASE64, thumb: { data: 'THUMB', mimeType: 'image/jpeg' } }
+    expect(imageFullSrc(att)).toBe(`data:image/png;base64,${TINY_PNG_BASE64}`)
   })
 })
 

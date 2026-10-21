@@ -256,6 +256,25 @@ FileManager 的文件图标通过 `useFileDrag` 的 Pointer 拖拽落到 ChatInp
 `MAX_AT_REFERENCES=8` 截断，插入到最后光标或活跃 `@token`（从未聚焦则追加到末尾）。
 `pendingInsert`（整段替换）语义不变。仅桌面/平板可用；移动端 Files/Chat 分 pane。
 
+### 输入草稿：文字与附件（切会话恢复）
+
+`ChatView` 用 `key={activeSessionId}` 重挂载 `ChatInput`，组件本地 state 不跨会话。
+两类草稿分开存放：
+
+- **文字**：`utils/chatDraft.ts` → `sessionStorage`（`omniterm_chat_draft:{sid}`），
+  刷新后仍在；每次输入写穿，发送时删除。
+- **图片 / 文件附件**：`utils/chatAttachmentDraft.ts` → **模块作用域**有界缓存
+  （8 个会话 / 32 MiB，插入序 LRU）。base64 原图可达 MiB 级，不能进
+  `sessionStorage`（约 5MB 配额会静默失败并挤掉其他草稿）；因此只保证
+  **切会话回来恢复**，刷新页面即清（与 `chatStore` 同生命周期，同
+  `chatScrollMemory` 的取舍）。`ChatInput` 挂载时读取、之后逐次写穿；发送
+  （`doSend`）显式清除。单条草稿超过总预算时不缓存（留在当前会话组件 state）。
+
+**已发送图片的大图预览**：气泡缩略图是 `<button>`，点击经 `Modal`（portal）
+打开预览。预览源恒为 `imageFullSrc`（块的 `data`）：live 消息 `data` 是原图
+（`thumb` 仅索引缩略图），hydrate 的历史行按「只落缩略图」决策（见
+`docs/dev/plans/archive/2026-09-10-chat-file-attachments.md` D3）`data` 即缩略图。
+
 ### Queued follow-up (N=1 single slot)
 
 While the agent is busy (`sending: true`), the input box stays editable.

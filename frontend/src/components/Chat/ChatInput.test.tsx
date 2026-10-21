@@ -5,6 +5,7 @@ import { ChatInput } from './ChatInput'
 import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
 import { saveDraft } from '../../utils/chatDraft'
+import { clearAllAttachmentDrafts } from '../../utils/chatAttachmentDraft'
 import '../../i18n'
 
 // jsdom 没有 createImageBitmap/canvas：图片管线直接 mock 掉，聚焦本组件的行为
@@ -54,6 +55,7 @@ beforeEach(() => {
   useChatStore.setState({ pendingInsert: null, pendingMention: null })
   useToastStore.setState({ toasts: [] })
   sessionStorage.clear()
+  clearAllAttachmentDrafts()
 })
 
 afterEach(() => {
@@ -129,6 +131,10 @@ function fileInput(): HTMLInputElement {
   return inputs[1]
 }
 
+function imageInput(): HTMLInputElement {
+  return container.querySelectorAll<HTMLInputElement>('input[type="file"]')[0]
+}
+
 function removeFileButton(): HTMLButtonElement | null {
   return container.querySelector<HTMLButtonElement>('button[title="Remove file"]')
 }
@@ -140,6 +146,19 @@ async function pickFile(name: string, type: string, body = 'hello') {
   await act(async () => {
     input.dispatchEvent(new Event('change', { bubbles: true }))
   })
+}
+
+async function pickImage(name = 'a.png', type = 'image/png') {
+  const input = imageInput()
+  const file = new File(['img'], name, { type })
+  Object.defineProperty(input, 'files', { value: [file], configurable: true })
+  await act(async () => {
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+
+function imageThumbs(): HTMLImageElement[] {
+  return Array.from(container.querySelectorAll<HTMLImageElement>('img'))
 }
 
 describe('ChatInput attach entry', () => {
@@ -214,12 +233,48 @@ describe('ChatInput file attachments', () => {
     expect(queue.disabled).toBe(true)
   })
 
-  it('clears attachments when the session changes', async () => {
+  it('keeps attachments per session and restores them when switching back', async () => {
     const props = render()
     await pickFile('a.pdf', 'application/pdf')
     expect(container.textContent).toContain('a.pdf')
+
     act(() => {
       root.render(<ChatInput {...props} sessionId="s2" />)
+    })
+    // 新会话看不到旧会话的附件……
+    expect(container.textContent).not.toContain('a.pdf')
+
+    // ……切回原会话时恢复（不再像以前那样清空）。
+    act(() => {
+      root.render(<ChatInput {...props} sessionId="s1" />)
+    })
+    expect(container.textContent).toContain('a.pdf')
+    expect(removeFileButton()).toBeTruthy()
+  })
+
+  it('restores image attachments across a remount of ChatInput', async () => {
+    const props = render()
+    await pickImage()
+    expect(imageThumbs()).toHaveLength(1)
+
+    // production 路径：ChatView 用 key=sessionId 重挂载组件。
+    act(() => {
+      root.render(<ChatInput key="s1-remounted" {...props} />)
+    })
+    expect(imageThumbs()).toHaveLength(1)
+    expect(imageThumbs()[0].getAttribute('src')).toBe('data:image/png;base64,AAAA')
+  })
+
+  it('does not restore attachments that were already sent', async () => {
+    const props = render()
+    await pickFile('a.pdf', 'application/pdf')
+    act(() => buttons()[buttons().length - 1].click())
+
+    act(() => {
+      root.render(<ChatInput {...props} sessionId="s2" />)
+    })
+    act(() => {
+      root.render(<ChatInput {...props} sessionId="s1" />)
     })
     expect(container.textContent).not.toContain('a.pdf')
   })

@@ -6,6 +6,11 @@ import { useChatStore, readQueuedFromStorageForSession, type SlashCommand } from
 import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
 import { getDraft, saveDraft, deleteDraft } from '../../utils/chatDraft'
+import {
+  clearAttachmentDraft,
+  getAttachmentDraft,
+  saveAttachmentDraft,
+} from '../../utils/chatAttachmentDraft'
 import { api, type FileEntry } from '../../api/client'
 import {
   findAtToken,
@@ -92,8 +97,14 @@ export function ChatInput({
   const [text, setText] = useState(() => getDraft(sessionId) || '')
   const [showCommands, setShowCommands] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
-  const [attachments, setAttachments] = useState<ImageAttachment[]>([])
-  const [files, setFiles] = useState<FileAttachment[]>([])
+  // 附件草稿：组件随 sessionId 重挂载，本地 state 不跨会话；模块级缓存负责
+  // 切回来时恢复（刷新即清，base64 不适合进 sessionStorage，见该模块 JSDoc）。
+  const [restoredDraft] = useState(() => getAttachmentDraft(sessionId))
+  const [attachments, setAttachments] = useState<ImageAttachment[]>(restoredDraft?.images ?? [])
+  const [files, setFiles] = useState<FileAttachment[]>(restoredDraft?.files ?? [])
+  // 当前附件 state 属于哪个会话：父组件复用实例切会话时，恢复批次落定前
+  // 阻止 write-through 把旧会话附件写进新会话的键。
+  const [attachmentsOwner, setAttachmentsOwner] = useState(sessionId)
   const [attachError, setAttachError] = useState<string | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   // @ 文件补全：光标处的 @token / Esc 关闭标记 / 搜索结果
@@ -150,8 +161,10 @@ export function ChatInput({
       prevSessionIdRef.current = sessionId
       const next = getDraft(sessionId)
       writeText(next, next.length, false)
-      setAttachments([])
-      setFiles([])
+      const nextAttachments = getAttachmentDraft(sessionId)
+      setAttachmentsOwner(sessionId)
+      setAttachments(nextAttachments?.images ?? [])
+      setFiles(nextAttachments?.files ?? [])
       setDrawerOpen(false)
       setAttachError(null)
       setAtToken(null)
@@ -169,6 +182,13 @@ export function ChatInput({
       deleteDraft(sessionId)
     }
   }, [sessionId, text, writeText])
+
+  // 附件写穿草稿缓存：增删改都立即反映，切会话时无需额外的“离开前保存”。
+  // owner 未追上 sessionId 的那一帧跳过（见 attachmentsOwner 注释）。
+  useEffect(() => {
+    if (attachmentsOwner !== sessionId) return
+    saveAttachmentDraft(sessionId, { images: attachments, files })
+  }, [sessionId, attachmentsOwner, attachments, files])
 
   // Hydrate queued message from sessionStorage on session switch / F5. The
   // sessionStorage cache survives page refreshes within the same tab (per Q6);
@@ -433,6 +453,7 @@ export function ChatInput({
     setAttachments([])
     setFiles([])
     deleteDraft(sessionId)
+    clearAttachmentDraft(sessionId)
     setShowCommands(false)
     setAtToken(null)
   }
