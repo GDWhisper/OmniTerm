@@ -158,4 +158,32 @@ describe('sessionToMarkdown', () => {
     expect(res.markdown).toContain('更早的历史未包含')
     expect(res.markdown).not.toContain('共 1 条')
   })
+
+  it('自定义 labels 覆盖默认中文（本地化路径）', () => {
+    const labels = {
+      markers: {
+        toolCallsTitle: '### Tool calls',
+        toolTruncated: (n: number) => `… (${n} lines omitted)`,
+        imageOmitted: (i: number) => `[Image ${i}: not exported]`,
+        imageAlt: (i: number) => `Image ${i}`,
+      },
+      title: (name: string) => `# Session export: ${name}`,
+      exportedAt: (time: string) => `Exported at: ${time}`,
+      messageCount: (included: number, total: number) => `Messages: ${included} (of ${total})`,
+      messageCountTruncated: (included: number) => `Messages: ${included} (incomplete)`,
+      notesTitle: '> Notes',
+      noteImages: '> - Images are inline thumbnails',
+      noteThinking: '> - Thinking is not exported',
+      noteToolLimit: (n: number) => `> - Tool output truncated to ${n} lines`,
+      noteImagesOmitted: (count: number) => `> - ${count} image(s) not inlined`,
+      omitted: (count: number, size: string) => `> ${count} earlier message(s) omitted (${size})`,
+    }
+    const res = sessionToMarkdown([msg('m1', 'user', '你好')], { now: NOW, labels })
+    expect(res.markdown).toContain('# Session export: ')
+    expect(res.markdown).toContain('Exported at: 2026-10-21 10:00:00')
+    expect(res.markdown).toContain('Messages: 1 (of 1)')
+    expect(res.markdown).toContain('> Notes')
+    expect(res.markdown).toContain('> - Thinking is not exported')
+    expect(res.markdown).not.toContain('会话导出')
+  })
 })

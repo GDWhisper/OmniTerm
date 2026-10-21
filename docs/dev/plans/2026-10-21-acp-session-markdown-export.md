@@ -13,6 +13,7 @@
 | `frontend/src/utils/messageMarkdown.ts` | 加图片渲染分支（`images: 'omit' \| 'inline' \| 'placeholder' \| 解析器`），单条复制默认 `omit`（行为逐字不变） |
 | `frontend/src/utils/sessionMarkdown.ts` | 纯函数 `sessionToMarkdown`（头部说明 + 条数/字节双上限 + 图片按预算逐图决策） |
 | `frontend/src/utils/sessionExport.ts` | `fetchAllMessages`（独立分页拉全量 + 载荷预算）、`downloadMarkdown`（Blob 下载 + 释放 object URL）、`exportFileName`（文件名清洗） |
+| `frontend/src/utils/markdownI18n.ts` | 导出件的 **i18n 接线**：导出件用到的全部 i18n key 只有这一处（序列化器是纯函数，不依赖 react-i18next） |
 | `frontend/src/utils/textBytes.ts` | UTF-8 字节数（`length` 是 UTF-16 code unit，中文会低估一半） |
 | `frontend/src/utils/storedMessages.ts` | `GET /messages` 行的**单一类型定义**（原为 ChatView 私有 interface） |
 | `frontend/src/components/Chat/ChatView.tsx` | 标题栏导出按钮（icon-only，spacer 之后、UsageIndicator 之前） |
@@ -20,11 +21,18 @@
 
 **实施偏差（相对本文 D1–D9 的补充决策，均为「原计划未涉及」的部分）**
 
-1. **导出件的文案语言固定为中文，不随 UI 语言切换。**
-   理由：`messageMarkdown.ts` 的既有标记（`… (省略 N 行)`）就是中文，单条「复制为
-   Markdown」在英文界面下产出的也是中文标记；导出件复用同一序列化器（D1），
-   故整体保持中文是**同源同貌**的延续。若要本地化，须连同单条复制一起改，
-   不能只改导出件一处（否则两条导出路径分叉，违反 D1）。
+1. **导出件的文案跟随界面语言**（维护者拍板：2026-10-21「导出的要做 i18n」）。
+   实现：`messageMarkdown.ts` / `sessionMarkdown.ts` 是纯函数、不依赖
+   react-i18next，文案经 `markers` / `labels` 参数注入；界面语言版本由
+   `utils/markdownI18n.ts` 依 i18n key 构造（**导出件用到的 key 只有这一处**）。
+   - **两种载体一起本地化**：会话级导出 + 消息级「复制为 Markdown」（后者经
+     `MessageActionContext.markers` 注入——动作注册表是模块级常量，拿不到 `t`）。
+     只改其一会让两条导出路径分叉，违反 D1。
+   - **不本地化的部分**：`## Agent:` / `## Turn:` 两行是导出**格式**的字段名
+     （既有单条复制产物逐字如此），不是散文；改它等于改格式，收益低于破坏面。
+   - **默认仍是中文**（`DEFAULT_MARKERS` / `DEFAULT_SESSION_LABELS`）：序列化器
+     不传参数时行为与实施前逐字不变，纯函数模块仍可在非组件上下文里复用与单测
+     （口径同 `utils/sessionDisplayName.ts`）。
 2. **被省略部分的字节数是估算**（按 `text` 列长度代理）。
    工具输出在 `blocks` 列里、不在 `text` 列，故工具重的消息会被低估；头部写
    「约」字样。条数是精确值。
@@ -49,6 +57,7 @@
 | `URL.revokeObjectURL` 被调用 | ✅ 单测断言 |
 | 非 ACP 会话不出现导出按钮 | ✅ 结构保证（ChatView 只在 `runtime_kind === 'acp'` 挂载） |
 | 真实浏览器端到端 | ✅ Chromium 实测：按钮可见、点击产出 `oh-my-pi_1001-1422.md`（401 KB，头部与正文正确） |
+| 导出件文案跟随界面语言 | ✅ Chromium 双语实测：en → `# Session export: …` / zh → `# 会话导出：…`（组件测试亦有语言切换用例） |
 
 ## 1. 背景
 

@@ -1,5 +1,5 @@
 import type { ChatMessage } from '../stores/chatStore'
-import { messageToMarkdown } from './messageMarkdown'
+import { messageToMarkdown, DEFAULT_MARKERS, type MessageMarkdownMarkers } from './messageMarkdown'
 import { utf8Bytes } from './textBytes'
 
 /**
@@ -27,6 +27,54 @@ export const MAX_EXPORT_MESSAGES = 2000
 /** 导出正文体积上限（UTF-8 字节）。 */
 export const MAX_EXPORT_BYTES = 8 * 1024 * 1024
 
+/**
+ * 导出件的**文案**（头部说明 + 正文标记）。
+ *
+ * 默认中文（[`DEFAULT_SESSION_LABELS`]）——纯函数模块不依赖 react-i18next，
+ * 以便在非组件上下文里复用与单测（口径同 `utils/sessionDisplayName.ts`）；
+ * 界面语言版本由 `utils/markdownI18n.ts` 依 i18n key 构造后注入。
+ */
+export interface SessionMarkdownLabels {
+  /** 正文标记文案（工具调用小节 / 截断提示 / 图片占位与 alt）。 */
+  markers: MessageMarkdownMarkers
+  /** 标题行（参数 = 会话显示名）。 */
+  title: (sessionName: string) => string
+  /** 导出时刻行（参数 = 已格式化的时刻）。 */
+  exportedAt: (time: string) => string
+  /** 消息条数行（历史完整；参数 = 纳入条数 / 候选总数）。 */
+  messageCount: (included: number, total: number) => string
+  /** 消息条数行（历史在拉取阶段即被截断；参数 = 纳入条数）。 */
+  messageCountTruncated: (included: number) => string
+  /** 说明小节标题。 */
+  notesTitle: string
+  /** 说明行：图片只有缩略图。 */
+  noteImages: string
+  /** 说明行：thinking 不导出。 */
+  noteThinking: string
+  /** 说明行：工具输出截断行数（参数 = 行数）。 */
+  noteToolLimit: (maxToolLines: number) => string
+  /** 说明行：因体积上限未内联的图片数（参数 = 张数）。 */
+  noteImagesOmitted: (count: number) => string
+  /** 省略提示（参数 = 省略条数 / 体积估算）。 */
+  omitted: (count: number, size: string) => string
+}
+
+/** 默认文案（中文）——不传 `labels` 时的既有行为。 */
+export const DEFAULT_SESSION_LABELS: SessionMarkdownLabels = {
+  markers: DEFAULT_MARKERS,
+  title: (sessionName) => `# 会话导出：${sessionName || '未命名会话'}`,
+  exportedAt: (time) => `导出时间：${time}`,
+  messageCount: (included, total) => `消息条数：${included}（共 ${total} 条）`,
+  messageCountTruncated: (included) => `消息条数：${included}（更早的历史未包含，导出不完整）`,
+  notesTitle: '> 说明',
+  noteImages: '> - 图片以内联缩略图导出（原图未落库，无法还原）',
+  noteThinking: '> - 思考过程（thinking）不导出',
+  noteToolLimit: (maxToolLines) => `> - 工具调用输出最多保留前 ${maxToolLines} 行`,
+  noteImagesOmitted: (count) => `> - ${count} 张图片因体积上限未内联（已标注为占位符）`,
+  omitted: (count, size) =>
+    `> 已省略较早的 ${count} 条消息（约 ${size}）——受导出条数/体积上限限制。`,
+}
+
 export interface SessionMarkdownOptions {
   /** agent 显示名（沿用单条导出口径）。 */
   agentName?: string
@@ -43,6 +91,8 @@ export interface SessionMarkdownOptions {
    * 否则「共 N 条」会被读成「这个会话一共 N 条」（静默失真，计划 D2/D6）。
    */
   historyTruncated?: boolean
+  /** 文案（头部说明 + 正文标记），默认中文（[`DEFAULT_SESSION_LABELS`]）。 */
+  labels?: SessionMarkdownLabels
   /** 导出时刻（测试注入用；默认取当前时刻）。 */
   now?: Date
 }
@@ -85,41 +135,41 @@ function formatBytes(bytes: number): string {
  * 已落库的内容）② 图片只有缩略图 ③ thinking 不导出 ④ 工具输出按 N 行截断；
  * 以及上限触顶时的省略量。
  */
-function buildHeader(opts: {
-  sessionName?: string
-  now: Date
-  included: number
-  total: number
-  omitted: number
-  omittedBytes: number
-  degradedImages: number
-  maxToolLines: number
-  historyTruncated: boolean
-}): string {
+function buildHeader(
+  opts: {
+    sessionName?: string
+    now: Date
+    included: number
+    total: number
+    omitted: number
+    omittedBytes: number
+    degradedImages: number
+    maxToolLines: number
+    historyTruncated: boolean
+  },
+  labels: SessionMarkdownLabels,
+): string {
   const lines: string[] = []
-  lines.push(`# 会话导出：${opts.sessionName || '未命名会话'}`)
+  lines.push(labels.title(opts.sessionName ?? ''))
   lines.push('')
-  lines.push(`导出时间：${formatTimestamp(opts.now)}`)
+  lines.push(labels.exportedAt(formatTimestamp(opts.now)))
   // 拉取阶段就停了 → 不能写「共 N 条」（会被读成会话一共 N 条）。
   lines.push(
     opts.historyTruncated
-      ? `消息条数：${opts.included}（更早的历史未包含，导出不完整）`
-      : `消息条数：${opts.included}（共 ${opts.total} 条）`,
+      ? labels.messageCountTruncated(opts.included)
+      : labels.messageCount(opts.included, opts.total),
   )
   lines.push('')
-  lines.push('> 说明')
-  lines.push('> - 图片以内联缩略图导出（原图未落库，无法还原）')
-  lines.push('> - 思考过程（thinking）不导出')
-  lines.push(`> - 工具调用输出最多保留前 ${opts.maxToolLines} 行`)
+  lines.push(labels.notesTitle)
+  lines.push(labels.noteImages)
+  lines.push(labels.noteThinking)
+  lines.push(labels.noteToolLimit(opts.maxToolLines))
   if (opts.degradedImages > 0) {
-    lines.push(`> - ${opts.degradedImages} 张图片因体积上限未内联（已标注为占位符）`)
+    lines.push(labels.noteImagesOmitted(opts.degradedImages))
   }
   if (opts.omitted > 0) {
     lines.push('')
-    lines.push(
-      `> 已省略较早的 ${opts.omitted} 条消息（约 ${formatBytes(opts.omittedBytes)}）` +
-        '——受导出条数/体积上限限制。',
-    )
+    lines.push(labels.omitted(opts.omitted, formatBytes(opts.omittedBytes)))
   }
   return lines.join('\n')
 }
@@ -141,6 +191,7 @@ export function sessionToMarkdown(
     maxMessages = MAX_EXPORT_MESSAGES,
     maxBytes = MAX_EXPORT_BYTES,
     historyTruncated = false,
+    labels = DEFAULT_SESSION_LABELS,
     now = new Date(),
   } = options
 
@@ -156,7 +207,13 @@ export function sessionToMarkdown(
   for (let i = candidates.length - 1; i >= 0; i--) {
     if (selected.length >= maxMessages) break
     const message = candidates[i]
-    const base = messageToMarkdown(message, { agentName, maxToolLines, now, images: 'omit' })
+    const base = messageToMarkdown(message, {
+      agentName,
+      maxToolLines,
+      now,
+      images: 'omit',
+      markers: labels.markers,
+    })
     if (!base) continue
     const size = utf8Bytes(base)
     // 至少保留一条：单条就超预算时也要给出内容（与后端分页「至少一行」同取舍）。
@@ -175,6 +232,7 @@ export function sessionToMarkdown(
       agentName,
       maxToolLines,
       now,
+      markers: labels.markers,
       images: (_index, byteLength) => {
         if (byteLength <= imageBudget) {
           imageBudget -= byteLength
@@ -194,17 +252,20 @@ export function sessionToMarkdown(
   const omitted = candidates.filter((m) => !selectedSet.has(m))
   const omittedBytes = omitted.reduce((sum, m) => sum + utf8Bytes(m.text ?? ''), 0)
 
-  const header = buildHeader({
-    sessionName,
-    now,
-    included: selected.length,
-    total: candidates.length,
-    omitted: omitted.length,
-    omittedBytes,
-    degradedImages,
-    maxToolLines,
-    historyTruncated,
-  })
+  const header = buildHeader(
+    {
+      sessionName,
+      now,
+      included: selected.length,
+      total: candidates.length,
+      omitted: omitted.length,
+      omittedBytes,
+      degradedImages,
+      maxToolLines,
+      historyTruncated,
+    },
+    labels,
+  )
 
   return {
     markdown: body ? `${header}\n\n${body}` : header,

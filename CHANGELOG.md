@@ -51,7 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
-- (2026-10-21 03:07) `[frontend]` ACP 会话可导出为 Markdown 文件：聊天面板标题栏新增导出按钮，点击后独立分页拉取该会话的**全部**历史（不复用界面上已加载的页——那只有首屏与用户上拉过的页，复用会产出「看起来完整、其实缺了前半段」的导出件），正文复用单条「复制为 Markdown」的序列化规则逐条拼装；导出件头部写明导出时刻、图片只有缩略图（原图不落库）、thinking 不导出与工具输出截断口径；条数与体积双上限触顶时保留最新的一段并显式标注省略量，图片按剩余预算内联 data URI 或降级为可见占位符（`frontend/src/utils/sessionMarkdown.ts`、`frontend/src/utils/sessionExport.ts`、`frontend/src/components/Chat/ChatView.tsx`）
+- (2026-10-21 03:07) `[frontend]` ACP 会话可导出为 Markdown 文件：聊天面板标题栏新增导出按钮，点击后独立分页拉取该会话的**全部**历史（不复用界面上已加载的页——那只有首屏与用户上拉过的页，复用会产出「看起来完整、其实缺了前半段」的导出件），正文复用单条「复制为 Markdown」的序列化规则逐条拼装；导出件头部写明导出时刻、图片只有缩略图（原图不落库）、thinking 不导出与工具输出截断口径；条数与体积双上限触顶时保留最新的一段并显式标注省略量，图片按剩余预算内联 data URI 或降级为可见占位符；导出件文案跟随界面语言（会话级导出与消息级「复制为 Markdown」共用同一套本地化文案）（`frontend/src/utils/sessionMarkdown.ts`、`frontend/src/utils/sessionExport.ts`、`frontend/src/utils/markdownI18n.ts`、`frontend/src/components/Chat/ChatView.tsx`）
 
 ### Fixed
 

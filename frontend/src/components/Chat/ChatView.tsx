@@ -23,6 +23,7 @@ import { decodeStoredBlocks, isRawFrameWrapper, parseConfigOptions } from '../..
 import { postSyncPayload } from '../../utils/syncMessages'
 import { sessionDisplayName } from '../../utils/sessionDisplayName'
 import { sessionToMarkdown } from '../../utils/sessionMarkdown'
+import { sessionMarkdownLabels } from '../../utils/markdownI18n'
 import { downloadMarkdown, exportFileName, fetchAllMessages } from '../../utils/sessionExport'
 import type { StoredMessage } from '../../utils/storedMessages'
 import {
@@ -766,8 +767,12 @@ export function ChatView() {
    * - 正文由 `utils/sessionMarkdown.ts` 复用单条 `messageToMarkdown` 逐条拼，
    *   并施加条数/字节双上限（触顶即显式标注省略量，不静默截断）。
    * - 文件名取会话显示名单一真源（`utils/sessionDisplayName.ts`）。
+   * - 导出件文案跟随界面语言（`utils/markdownI18n.ts`）：导出件会脱离
+   *   OmniTerm 独立流通，读者看到的应是自己的语言。
    */
   const [exporting, setExporting] = useState(false)
+  // 导出件的文案：随界面语言变（t 的引用随语言切换而变 → memo 随之重算）。
+  const exportLabels = useMemo(() => sessionMarkdownLabels(t), [t])
   const handleExportMarkdown = useCallback(async () => {
     const sid = activeSessionId
     if (!sid || exporting) return
@@ -780,6 +785,7 @@ export function ChatView() {
         agentName: chatState.agentName || fallbackAgentName,
         sessionName: displayName,
         historyTruncated: truncated,
+        labels: exportLabels,
       })
       downloadMarkdown(exportFileName(displayName), result.markdown)
       const toast = useToastStore.getState().addToast
@@ -803,6 +809,7 @@ export function ChatView() {
     agents,
     chatState.agentName,
     fallbackAgentName,
+    exportLabels,
     t,
   ])
 

@@ -140,4 +140,34 @@ describe('messageToMarkdown 图片渲染', () => {
     expect(md).toContain('![图片 1]')
     expect(md).toContain('![图片 2]')
   })
+
+  it('自定义 markers 覆盖默认中文（本地化路径）', () => {
+    const markers = {
+      toolCallsTitle: '### Tool calls',
+      toolTruncated: (n: number) => `… (${n} lines omitted)`,
+      imageOmitted: (i: number) => `[Image ${i}: not exported]`,
+      imageAlt: (i: number) => `Image ${i}`,
+    }
+    const md = messageToMarkdown(msg('assistant', [tool({ content: 'a\nb\nc' })]), {
+      now: NOW,
+      maxToolLines: 2,
+      markers,
+    })
+    expect(md).toContain('### Tool calls')
+    expect(md).toContain('(1 lines omitted)')
+
+    const img = messageToMarkdown(msg('user', [image()]), {
+      now: NOW,
+      images: 'placeholder',
+      markers,
+    })
+    expect(img).toContain('> [Image 1: not exported]')
+
+    const inline = messageToMarkdown(msg('user', [image()]), {
+      now: NOW,
+      images: 'inline',
+      markers,
+    })
+    expect(inline).toContain('![Image 1](data:image/jpeg;base64,QUJD)')
+  })
 })

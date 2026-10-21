@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { ChatView } from './ChatView'
 import { useToastStore } from '../../stores/toastStore'
+import i18n from '../../i18n'
 import {
   setupChatViewStores,
   resetChatViewStores,
@@ -117,7 +118,32 @@ describe('ChatView 会话导出', () => {
     expect(content).toContain('第二条')
     // 时间正序：先出现的应是较早的那条。
     expect(content.indexOf('第一条')).toBeLessThan(content.indexOf('第二条'))
-    expect(content).toContain('# 会话导出：')
+    // 头部文案跟随界面语言（测试环境的语言是 en —— jsdom 的 navigator 是 en-US）。
+    expect(content).toContain('# Session export:')
+    expect(content).toContain('Exported at:')
+  })
+
+  it('导出件文案跟随界面语言（切到中文即中文头部与说明）', async () => {
+    await i18n.changeLanguage('zh')
+    try {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          messages: [dbRow('row-1', 'user', '你好', '2026-10-21T09:00:01Z')],
+          nextCursor: null,
+        }),
+      })
+      renderView()
+      await act(async () => {
+        exportButton().click()
+      })
+      const content = await blobs[0].text()
+      expect(content).toContain('# 会话导出：')
+      expect(content).toContain('导出时间：')
+      expect(content).toContain('思考过程（thinking）不导出')
+    } finally {
+      await i18n.changeLanguage('en')
+    }
   })
 
   it('导出成功给出条数 toast', async () => {

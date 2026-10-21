@@ -22,6 +22,7 @@ import { DiffView } from './DiffView'
 import { FileLocationLink } from './FileLocationLink'
 import { messageActions, type MessageActionHandlers, type MessageActionContext } from './messageActions'
 import { MessageActionBar, type ActionMenuPosition } from './MessageActionBar'
+import { markdownMarkers } from '../../utils/markdownI18n'
 import { hapticTap } from '../../utils/haptics'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
@@ -1036,7 +1037,15 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
     [onCopyMessage, onQuoteMessage, onRegenerate],
   )
 
-  const ctx: MessageActionContext = { message, isLastAssistant: !!isLastAssistant, handlers, agentName }
+  // 「复制为 Markdown」的标记文案随界面语言（动作注册表是模块级常量，拿不到 t）。
+  const markers = useMemo(() => markdownMarkers(t), [t])
+  const ctx: MessageActionContext = {
+    message,
+    isLastAssistant: !!isLastAssistant,
+    handlers,
+    agentName,
+    markers,
+  }
   const visibleActions = messageActions.filter((a) => a.visible(ctx))
 
   // 长按手势（D3）：绑定消息行，但正文块（data-chat-body）不触发——保留系统
