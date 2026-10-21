@@ -1,7 +1,7 @@
 # ACP 会话导出 Markdown
 
-> 状态：**已实施**（2026-10-21）
-> 触发条件：改 `frontend/src/utils/messageMarkdown.ts`、新增/改会话级导出、动 `ChatView` 标题栏按钮或消息分页链路前**必读**
+> 状态：**已归档（2026-10-21）**——已实施（2026-10-21），实施记录与验收对照见本文
+> 触发条件：改 `frontend/src/utils/messageMarkdown.ts` / `sessionMarkdown.ts` / `sessionExport.ts` / `hooks/useSessionExport.ts`、新增/改会话级导出、动侧栏会话右键菜单或消息分页链路前**必读**
 > 关联：`docs/dev/plans/2026-07-27-acp-session-enhancements.md` F08（本文是它的落地计划）、`docs/dev/plans/backlog/improvement-directions-remaining.md` X02（本文承担 X02 的「导出」半边）、`docs/dev/performance-and-safety.md` §P1/§P5
 
 ## 0. 实施记录（2026-10-21）

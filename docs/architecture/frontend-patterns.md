@@ -214,7 +214,7 @@
 
 **约定**（实现见 `frontend/src/utils/messageMarkdown.ts` +
 `sessionMarkdown.ts` + `sessionExport.ts`，计划
-`docs/dev/plans/2026-10-21-acp-session-markdown-export.md`）：
+`docs/dev/plans/archive/2026-10-21-acp-session-markdown-export.md`）：
 
 - **序列化只有一个真源** `messageToMarkdown(message, options)`：会话级导出
   逐条调用它拼装，**不新造「会话级序列化器」**——两条载体的输出格式因此逐字
