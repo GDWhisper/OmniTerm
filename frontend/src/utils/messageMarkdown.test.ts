@@ -84,3 +84,60 @@ describe('messageToMarkdown', () => {
     expect(messageToMarkdown(msg('system', [text('x')]), { now: NOW })).toBe('')
   })
 })
+
+describe('messageToMarkdown 图片渲染', () => {
+  function image(overrides: Partial<Extract<ContentBlock, { type: 'image' }>> = {}): ContentBlock {
+    return {
+      type: 'image',
+      mimeType: 'image/jpeg',
+      data: 'QUJD',
+      ...overrides,
+    }
+  }
+
+  it('默认（omit）不渲染图片块——单条复制行为逐字不变', () => {
+    const md = messageToMarkdown(msg('user', [image()]), { now: NOW })
+    expect(md).not.toContain('data:image')
+    expect(md).not.toContain('图片')
+  })
+
+  it('inline：图片以 data URI 内联', () => {
+    const md = messageToMarkdown(msg('user', [image()]), { now: NOW, images: 'inline' })
+    expect(md).toContain('![图片 1](data:image/jpeg;base64,QUJD)')
+  })
+
+  it('inline 优先取缩略图（thumb 存在时不用 data）', () => {
+    const md = messageToMarkdown(
+      msg('user', [image({ data: 'T1JJRw==', thumb: { data: 'VEhVTUI=', mimeType: 'image/jpeg' } })]),
+      { now: NOW, images: 'inline' },
+    )
+    expect(md).toContain('base64,VEhVTUI=')
+    expect(md).not.toContain('T1JJRw==')
+  })
+
+  it('placeholder：只留占位符行，不含 data URI', () => {
+    const md = messageToMarkdown(msg('user', [image()]), { now: NOW, images: 'placeholder' })
+    expect(md).toContain('> [图片 1：未导出（超出体积上限）]')
+    expect(md).not.toContain('data:image')
+  })
+
+  it('解析器收到消息内序号与内联渲染的字节数', () => {
+    const seen: Array<[number, number]> = []
+    messageToMarkdown(msg('user', [image(), image()]), {
+      now: NOW,
+      images: (index, byteLength) => {
+        seen.push([index, byteLength])
+        return 'inline'
+      },
+    })
+    expect(seen.map(([i]) => i)).toEqual([1, 2])
+    const expected = new TextEncoder().encode('![图片 1](data:image/jpeg;base64,QUJD)').length
+    expect(seen[0][1]).toBe(expected)
+  })
+
+  it('多张图片按序编号', () => {
+    const md = messageToMarkdown(msg('user', [image(), image()]), { now: NOW, images: 'inline' })
+    expect(md).toContain('![图片 1]')
+    expect(md).toContain('![图片 2]')
+  })
+})

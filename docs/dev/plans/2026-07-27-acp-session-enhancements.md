@@ -11,7 +11,7 @@
 > | F05 | 检查点 / 回滚 | **重做**：`docs/dev/plans/2026-10-21-acp-turn-checkpoint-rollback.md`（原 §3.5 的 git 语义与触发时机均不成立，见该文 §1 + 本文 §3.5 勘误） |
 > | F06 | 会话内搜索 | `docs/dev/plans/2026-10-21-acp-chat-fulltext-search.md` |
 > | F07 | 浏览器桌面通知 | `docs/dev/plans/2026-10-21-browser-desktop-notification.md` |
-> | F08 | 会话导出 Markdown | `docs/dev/plans/2026-10-21-acp-session-markdown-export.md` |
+> | F08 | 会话导出 Markdown | `docs/dev/plans/2026-10-21-acp-session-markdown-export.md`（**2026-10-21 已实施**） |
 
 ---
 
@@ -52,7 +52,7 @@
 |------|------|------|------|
 | F06 | 会话内搜索 | Ctrl+F 唤起搜索栏，匹配消息文本，高亮 + 跳转 | 1d |
 | F07 | 浏览器桌面通知 | attention 事件（done / error / decision）触发 `Notification` API；设置面板开关 | 0.5d |
-| F08 | 会话导出 Markdown | ChatView 工具栏按钮，将结构化 blocks 序列化为 Markdown 下载 | 0.5d |
+| F08 | 会话导出 Markdown | ChatView 工具栏按钮，将结构化 blocks 序列化为 Markdown 下载（**已实施 2026-10-21**） | 0.5d |
 | F09 | 自动会话标题 | 首次 prompt_done 后取用户消息前 40 字符作为 session name（调 rename API）；可选手动覆盖 | 0.5d |
 | F10 | 上下文窗口组成可视化 | 用量环 hover 展示分类占比（system / history / tool output）；依赖 agent 是否上报细分 usage，不支持时降级为当前总量展示 | 1d |
 

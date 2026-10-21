@@ -2946,6 +2946,30 @@ select optgroup option {
 .panel-title-bar .title-bar-collapse:hover {
   color: #FAF2DE;
 }
+/* Title bar icon button — functional action entry (chat Markdown export).
+   Distinct from .title-bar-badge: badges are READ-ONLY status indicators
+   (§4.1 — never shaped like a button); this one IS clickable, so it gets a
+   transparent background, no border, and a dimmed glyph that brightens on
+   hover. Color comes from the bar itself (currentColor → the icon's
+   stroke="currentColor"), dimming via opacity — no hardcoded hex. */
+.panel-title-bar .title-bar-icon-btn {
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  display: inline-flex;
+  align-items: center;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  transition: opacity 0.1s steps(2);
+}
+.panel-title-bar .title-bar-icon-btn:hover:not(:disabled) {
+  opacity: 1;
+}
+.panel-title-bar .title-bar-icon-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
 
 /* ────────────────────────────────────────────────────────────────────
    Git panel — docs/dev/plans/archive/2026-07-26-git-panel.md ADR-7.

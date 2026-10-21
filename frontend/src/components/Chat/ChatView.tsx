@@ -15,12 +15,16 @@ import { UsageIndicator } from './UsageIndicator'
 import { TodoBoard } from './TodoBoard'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { OverlayScroll } from '../Common/OverlayScroll'
-import { IconArrowDown } from '../FileManager/icons'
+import { IconArrowDown, IconDownload } from '../FileManager/icons'
 import { READER_FONT } from '../../utils/fonts'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
 import { decodeStoredBlocks, isRawFrameWrapper, parseConfigOptions } from '../../hooks/useAcpChat'
 import { postSyncPayload } from '../../utils/syncMessages'
+import { sessionDisplayName } from '../../utils/sessionDisplayName'
+import { sessionToMarkdown } from '../../utils/sessionMarkdown'
+import { downloadMarkdown, exportFileName, fetchAllMessages } from '../../utils/sessionExport'
+import type { StoredMessage } from '../../utils/storedMessages'
 import {
   clearChatScrollMemory,
   getChatScrollMemory,
@@ -65,29 +69,13 @@ const CHAT_STICK_THRESHOLD_PX = 24
  */
 const RESUME_CATCH_UP_GRACE_MS = 3_000
 
-/** `GET /messages` 响应里的单条消息。 */
-interface StoredMessage {
-  id: string
-  role: string
-  text: string
-  createdAt: string
-  blocks?: string | null
-  status?: string | null
-  /** turn 工作时长 / 等审批时长（ms）；null = 无记录（迁移前的历史行）。 */
-  durationMs?: number | null
-  waitMs?: number | null
-  /** 工具耗时（ms）与输出速率（tokens/s）估算；null = 无读数（历史行 / 跟踪失效 /
-   *  无可测流式窗口）。后端在 turn 定稿时结算并落库，刷新后常驻。 */
-  toolMs?: number | null
-  tps?: number | null
-  /** turn 定稿时刻（RFC3339）；null = 无记录（迁移前的历史行），该段不渲染。 */
-  finishedAt?: string | null
-}
-
 /**
  * DB 行 → `ChatMessage`。首屏 hydrate 与上拉分页共用同一转换，避免两份平行的
  * blocks 解码/兜底逻辑跑偏。blocks 解不出结构时回退纯文本（text 列
  * 超长会被后端折叠成头尾 + 「已省略 N 字符」标记，故兜底文本可能不完整，但一定可读）。
+ *
+ * 会话级导出（utils/sessionExport.ts）复用同一转换——导出的正文口径必须与
+ * 气泡里看到的完全一致。
  */
 function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
   const messages = rows.map((m) => {
@@ -769,6 +757,55 @@ export function ChatView() {
     useChatStore.getState().requestInsert(activeSessionId, text)
   }, [activeSessionId])
 
+  /**
+   * F08 会话导出 Markdown。
+   *
+   * - **独立分页拉全量**（`utils/sessionExport.ts`）：不复用 store 已 hydrate 的
+   *   页——那只有首屏 + 用户上拉加载过的页，复用它会导出一份「看起来完整、其实
+   *   缺了前半段」的文件（计划 D2：静默失真比不导出更糟）。
+   * - 正文由 `utils/sessionMarkdown.ts` 复用单条 `messageToMarkdown` 逐条拼，
+   *   并施加条数/字节双上限（触顶即显式标注省略量，不静默截断）。
+   * - 文件名取会话显示名单一真源（`utils/sessionDisplayName.ts`）。
+   */
+  const [exporting, setExporting] = useState(false)
+  const handleExportMarkdown = useCallback(async () => {
+    const sid = activeSessionId
+    if (!sid || exporting) return
+    setExporting(true)
+    try {
+      const { rows, truncated } = await fetchAllMessages(sid)
+      const messages = toChatMessages(rows)
+      const displayName = sessionDisplayName(activeSession ?? {}, agents, t('sidebar.unnamed'))
+      const result = sessionToMarkdown(messages, {
+        agentName: chatState.agentName || fallbackAgentName,
+        sessionName: displayName,
+        historyTruncated: truncated,
+      })
+      downloadMarkdown(exportFileName(displayName), result.markdown)
+      const toast = useToastStore.getState().addToast
+      toast('success', t('chat.export.done', { count: result.includedMessages }))
+      if (result.omittedMessages > 0) {
+        toast('warning', t('chat.export.truncated', { count: result.omittedMessages }))
+      }
+      if (truncated) {
+        // 页数上限触顶 = 更早的历史没拉全，导出件本身不完整——必须说清楚。
+        toast('warning', t('chat.export.truncatedPages'))
+      }
+    } catch {
+      useToastStore.getState().addToast('error', t('chat.export.failed'))
+    } finally {
+      setExporting(false)
+    }
+  }, [
+    activeSessionId,
+    exporting,
+    activeSession,
+    agents,
+    chatState.agentName,
+    fallbackAgentName,
+    t,
+  ])
+
   // No session: empty-state placeholder matching Terminal.tsx's look.
   if (!activeSession) {
     return (
@@ -877,6 +914,19 @@ export function ChatView() {
           </span>
         )}
         <span className="title-bar-spacer" />
+        {/* 导出入口（F08）：icon-only，导出中禁用。放在 spacer 之后——
+            用量徽章与会话状态徽章是「只读状态」，导出是可点动作，两者不能混成一个
+            视觉层级（ui-style-guide §4.1：状态指示器不可做成 button 形状）。 */}
+        <button
+          type="button"
+          className="title-bar-icon-btn"
+          onClick={handleExportMarkdown}
+          disabled={exporting}
+          title={t('chat.export.title')}
+          aria-label={t('chat.export.title')}
+        >
+          <IconDownload width={14} height={14} />
+        </button>
         {/* 用量是会话级状态（上下文占用 / 费用），与 LIVE/DEAD 徽章同类；放在
             配置控制区会既挤占窄屏又把「只报用量不发配置」的 agent 渲染成一条
             只有圆环的配置栏。 */}

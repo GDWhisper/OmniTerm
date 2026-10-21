@@ -206,6 +206,55 @@
 **代价**：`visible` 的边界条件集中后，迁移旧内联动作时若漏掉一条会回归
 （注册表文件的 JSDoc 已列边界清单，验收测试覆盖 memo 契约不被破坏）。
 
+## 导出类工具的两级载体 (export-tool convention)
+
+**适用场景**：同一份「结构化内容 → 文本」的转换要同时服务**剪贴板**与**文件下载**
+两种载体——载体不同，图片策略、截断口径、体积上限的要求就不同，但**序列化规则
+必须只有一份**（两套规则必然漂移，工程准则 7①）。
+
+**约定**（实现见 `frontend/src/utils/messageMarkdown.ts` +
+`sessionMarkdown.ts` + `sessionExport.ts`，计划
+`docs/dev/plans/2026-10-21-acp-session-markdown-export.md`）：
+
+- **序列化只有一个真源** `messageToMarkdown(message, options)`：会话级导出
+  逐条调用它拼装，**不新造「会话级序列化器」**——两条载体的输出格式因此逐字
+  一致（导出的文件与复制到剪贴板的内容长得一样）
+- **载体差异用参数表达，不用两套代码**：
+  - 图片渲染策略 `images`：`'omit'`（默认——剪贴板不内联 base64，否则一次复制
+    几 MB 会让粘贴方卡死）/ `'inline'` / `'placeholder'`，或按「序号 + 内联
+    字节数」逐图决策的解析器（会话级导出用它按剩余预算决定内联还是降级）
+  - 工具内容截断行数 `maxToolLines`（默认 40）
+- **会话级必须独立取数**：导出走 `utils/sessionExport.ts::fetchAllMessages`
+  循环 `?before=<cursor>` 拉全量，**不复用 `chatStore` 已加载的页**——那只有
+  首屏 + 用户上拉加载过的页，复用它会导出一份「看起来完整、其实缺了前半段」
+  的文件（静默失真比不导出更糟）
+- **体积预算必须双轴**（条数 + 字节）且**触顶显式标注省略量**：条数与字节是
+  两个独立增长轴，只限一个等于没限；静默截断会让用户以为导出的是完整会话。
+  字节口径用 UTF-8（`utils/textBytes.ts`），不是 `String.length`（后者是
+  UTF-16 code unit，中文会低估一半）
+- **拉取阶段另设原始载荷预算**（渲染上限之外的第二道闸）：原始载荷通常远大于
+  渲染结果（工具输出在导出件里只留 N 行），不设它则长会话会把浏览器内存吃满。
+  触顶即停并标记「更早的历史未包含」——头部与 toast 都要说，**不静默产出
+  残缺文件**
+- **导出件头部写明口径**：导出时刻、图片只有缩略图（原图不落库）、thinking 不
+  导出、工具输出截断行数、被省略的量。导出件会脱离 OmniTerm 独立流通，缺了
+  这几行用户会在几周后把「缺图」「缺思考」当成 bug
+- **文件下载用 Blob + object URL**，且 `URL.revokeObjectURL` 必须调用（否则
+  blob 驻留内存）——但**延后一拍**再释放：同步释放会打断刚触发的下载
+
+**已有案例**：
+
+- `frontend/src/utils/messageMarkdown.ts` — 消息级「复制为 Markdown」
+  （`components/Chat/messageActions.ts` 注册表里的 `copyMarkdown` 动作）
+- `frontend/src/utils/sessionMarkdown.ts` + `sessionExport.ts` — 会话级
+  「导出为 Markdown」（`ChatView` 标题栏按钮）
+
+**收益**：新增导出载体（复制到剪贴板 / 下载文件 / 未来的分享入口）= 加一个
+调用点，格式自动与既有一致；图片与截断口径只有一处可调。
+**代价**：会话级导出多一层「独立取数 + 双预算 + 头部说明」的样板
+（`sessionExport.ts` 与 `sessionMarkdown.ts`）；载体差异全靠参数表达，参数语义
+要读注释才懂。
+
 ## 会话行上下文菜单与批量选择态 (context-menu convention)
 
 **适用场景**：列表行的动作菜单需要同时服务桌面（右键）与移动端（长按），

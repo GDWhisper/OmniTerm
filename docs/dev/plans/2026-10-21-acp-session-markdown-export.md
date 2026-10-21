@@ -1,8 +1,54 @@
 # ACP 会话导出 Markdown
 
-> 状态：**设计稿**（2026-10-21）
+> 状态：**已实施**（2026-10-21）
 > 触发条件：改 `frontend/src/utils/messageMarkdown.ts`、新增/改会话级导出、动 `ChatView` 标题栏按钮或消息分页链路前**必读**
 > 关联：`docs/dev/plans/2026-07-27-acp-session-enhancements.md` F08（本文是它的落地计划）、`docs/dev/plans/backlog/improvement-directions-remaining.md` X02（本文承担 X02 的「导出」半边）、`docs/dev/performance-and-safety.md` §P1/§P5
+
+## 0. 实施记录（2026-10-21）
+
+**落地文件**
+
+| 文件 | 作用 |
+|---|---|
+| `frontend/src/utils/messageMarkdown.ts` | 加图片渲染分支（`images: 'omit' \| 'inline' \| 'placeholder' \| 解析器`），单条复制默认 `omit`（行为逐字不变） |
+| `frontend/src/utils/sessionMarkdown.ts` | 纯函数 `sessionToMarkdown`（头部说明 + 条数/字节双上限 + 图片按预算逐图决策） |
+| `frontend/src/utils/sessionExport.ts` | `fetchAllMessages`（独立分页拉全量 + 载荷预算）、`downloadMarkdown`（Blob 下载 + 释放 object URL）、`exportFileName`（文件名清洗） |
+| `frontend/src/utils/textBytes.ts` | UTF-8 字节数（`length` 是 UTF-16 code unit，中文会低估一半） |
+| `frontend/src/utils/storedMessages.ts` | `GET /messages` 行的**单一类型定义**（原为 ChatView 私有 interface） |
+| `frontend/src/components/Chat/ChatView.tsx` | 标题栏导出按钮（icon-only，spacer 之后、UsageIndicator 之前） |
+| `frontend/src/index.css` | `.panel-title-bar .title-bar-icon-btn`（透明底、无边框，区别于不可点的状态徽章） |
+
+**实施偏差（相对本文 D1–D9 的补充决策，均为「原计划未涉及」的部分）**
+
+1. **导出件的文案语言固定为中文，不随 UI 语言切换。**
+   理由：`messageMarkdown.ts` 的既有标记（`… (省略 N 行)`）就是中文，单条「复制为
+   Markdown」在英文界面下产出的也是中文标记；导出件复用同一序列化器（D1），
+   故整体保持中文是**同源同貌**的延续。若要本地化，须连同单条复制一起改，
+   不能只改导出件一处（否则两条导出路径分叉，违反 D1）。
+2. **被省略部分的字节数是估算**（按 `text` 列长度代理）。
+   工具输出在 `blocks` 列里、不在 `text` 列，故工具重的消息会被低估；头部写
+   「约」字样。条数是精确值。
+3. **拉取阶段多了一个原始载荷预算**（`EXPORT_MAX_PAYLOAD_CHARS` = 32 MiB 字符）。
+   渲染上限是 8 MiB，但原始载荷通常远大于渲染结果（工具输出在导出件里只留
+   40 行）。不设这个上限时，「400MB 工具输出」的长会话会把 200 页 × 2MB
+   全部拉进浏览器内存。触顶即停并标记 `truncated`，头部与 toast 都写明
+   「更早的历史未包含」——**不静默产出残缺文件**。
+4. **文件名做了保守清洗**（路径分隔符等换成 `_`，控制字符剔除，空名兜底
+   `session.md`）：会话名由用户/agent 决定，直接当文件名会被浏览器截断。
+
+**验收对照**
+
+| 验收项 | 结果 |
+|---|---|
+| 导出件含全部已落库消息（独立分页拉全量） | ✅ 实测：15 行会话导出 14 条（1 条 system 按 D7 排除） |
+| 头部含导出时刻 / 图片口径 / 省略量 | ✅ |
+| 图片 data URI 内联 / 超预算降级为可见占位符 | ✅ 单测 + 纯函数锁死 |
+| 工具调用 40 行截断标注可见 | ✅（复用既有口径） |
+| system 消息不导出 | ✅ |
+| 双上限触发仍能下载且写明省略量 | ✅ |
+| `URL.revokeObjectURL` 被调用 | ✅ 单测断言 |
+| 非 ACP 会话不出现导出按钮 | ✅ 结构保证（ChatView 只在 `runtime_kind === 'acp'` 挂载） |
+| 真实浏览器端到端 | ✅ Chromium 实测：按钮可见、点击产出 `oh-my-pi_1001-1422.md`（401 KB，头部与正文正确） |
 
 ## 1. 背景
 

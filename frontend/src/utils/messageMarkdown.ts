@@ -1,4 +1,5 @@
-import type { ChatMessage, ContentBlock, ToolCallBlock } from '../stores/chatStore'
+import type { ChatMessage, ContentBlock, ImageBlock, ToolCallBlock } from '../stores/chatStore'
+import { utf8Bytes } from './textBytes'
 
 /**
  * 单条消息 → Markdown（D5「复制为 Markdown」）。
@@ -25,7 +26,29 @@ import type { ChatMessage, ContentBlock, ToolCallBlock } from '../stores/chatSto
  *   为模糊 `'other'` 时降级显示 title / 'tool'（§8：不把某实现的字段习惯当事实）。
  * - thought 默认省略（思考过程不属于导出正文）。
  * - diff / 长工具内容一律截断到前 N 行——取原样文本由块级复制（P1）覆盖。
+ * - **图片默认不渲染**（`images: 'omit'`）：剪贴板不该被 base64 撑爆
+ *   （计划 `2026-10-21-acp-session-markdown-export.md` D5）。会话级导出传
+ *   `images: 'inline'`（内联缩略图 data URI）或按剩余预算逐图决策的解析器
+ *   （见 `utils/sessionMarkdown.ts`），两条路径共用本文件这一处渲染规则。
+ *
+ * 文案口径：本模块的标记（`省略 N 行` / 图片占位符）与既有单条导出保持一致，
+ * **不做按语言分叉**——导出件与「复制为 Markdown」的产物同源同貌（D1）；
+ * 若日后要让导出文件整体本地化，应连同单条复制一起改，而不是只改一处。
  */
+
+/** 图片渲染决策。 */
+export type ImageRenderDecision = 'omit' | 'inline' | 'placeholder'
+
+/**
+ * 图片渲染决策来源：常量，或按「序号 + 内联渲染字节数」逐图决策的解析器。
+ *
+ * 解析器存在的意义：会话级导出要按**剩余字节预算**逐图决定「内联 data URI」
+ * 还是「降级为占位符」（计划 D3）——这个判断需要导出器掌握全局预算，
+ * 单条消息自己算不了，故由外部注入。序号为消息内序号（1 起）。
+ */
+export type ImageRenderResolver =
+  | ImageRenderDecision
+  | ((index: number, byteLength: number) => ImageRenderDecision)
 
 export interface MessageMarkdownOptions {
   /** agent 显示名（来自 capabilities 帧或会话关联 agents.display_name）。 */
@@ -34,6 +57,11 @@ export interface MessageMarkdownOptions {
   maxToolLines?: number
   /** 测试注入用；默认取当前时刻。 */
   now?: Date
+  /**
+   * 图片渲染策略，默认 `'omit'`（图片块不渲染——既有单条复制行为逐字不变）。
+   * `'inline'` 内联缩略图 data URI；`'placeholder'` 只留占位符行。
+   */
+  images?: ImageRenderResolver
 }
 
 const STATUS_ICONS: Record<ToolCallBlock['status'], string> = {
@@ -80,8 +108,44 @@ function isTextBlock(block: ContentBlock): block is Extract<ContentBlock, { type
   return block.type === 'text'
 }
 
+function isImageBlock(block: ContentBlock): block is ImageBlock {
+  return block.type === 'image'
+}
+
+/**
+ * 图片内联 Markdown：`![图片 N](data:<mime>;base64,<data>)`。
+ *
+ * 取 `thumb ?? data`：落库时原图被换成缩略图（`chatStore.toPersistedBlocks`
+ * 把 `data` 覆写成 `thumb.data`），故**已落库行里的 `data` 本身就是缩略图**；
+ * live 未落库时 `data` 才是原图——thumb 优先可保证任何来源都取缩略图。
+ */
+function inlineImage(index: number, block: ImageBlock): string {
+  const source = block.thumb ?? { data: block.data, mimeType: block.mimeType }
+  return `![图片 ${index}](data:${source.mimeType};base64,${source.data})`
+}
+
+/** 图片未导出的占位符（体积预算装不下时）。 */
+function imagePlaceholder(index: number): string {
+  return `[图片 ${index}：未导出（超出体积上限）]`
+}
+
+function renderImages(images: ImageBlock[], resolver: ImageRenderResolver): string {
+  const decide = typeof resolver === 'function' ? resolver : () => resolver
+  const parts: string[] = []
+  images.forEach((block, i) => {
+    const index = i + 1
+    const md = inlineImage(index, block)
+    // 解析器拿到的是「内联渲染」的字节数——它据此判断装不装得下；
+    // 决策为 placeholder 时实际占用的是占位符的字节数（由调用方自行核算）。
+    const decision = decide(index, utf8Bytes(md))
+    if (decision === 'omit') return
+    parts.push(decision === 'placeholder' ? `> ${imagePlaceholder(index)}` : md)
+  })
+  return parts.join('\n\n')
+}
+
 export function messageToMarkdown(message: ChatMessage, options: MessageMarkdownOptions = {}): string {
-  const { agentName, maxToolLines = 40, now = new Date() } = options
+  const { agentName, maxToolLines = 40, now = new Date(), images = 'omit' } = options
   if (message.role === 'system') return ''
 
   const sections: string[] = []
@@ -93,12 +157,17 @@ export function messageToMarkdown(message: ChatMessage, options: MessageMarkdown
   const toolCalls = (message.blocks ?? []).filter(
     (b): b is ToolCallBlock => b.type === 'tool_call',
   )
+  const imageBlocks = (message.blocks ?? []).filter(isImageBlock)
 
   if (textParts.length > 0) {
     sections.push(textParts.map((b) => b.text).join('\n\n'))
   }
   if (toolCalls.length > 0) {
     sections.push(`### 工具调用\n${toolCalls.map((b) => renderToolCall(b, maxToolLines)).join('\n')}`)
+  }
+  if (imageBlocks.length > 0) {
+    const rendered = renderImages(imageBlocks, images)
+    if (rendered) sections.push(rendered)
   }
 
   return sections.join('\n\n')
