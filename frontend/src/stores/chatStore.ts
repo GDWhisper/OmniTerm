@@ -433,6 +433,22 @@ interface ChatActions {
     messages: ChatMessage[],
     historyCursor: string | null,
   ) => void
+  /**
+   * 消息窗口**整体替换**（F06 定位页，plan D8）：把窗口换成定位页的内容，并把
+   * 历史游标重置为该页最旧行——替换后「继续上翻加载更早」从该页最旧行接上，
+   * 语义正确。
+   *
+   * 为什么是替换而不是前插：前插会让目标消息与已加载的新消息之间出现空洞
+   * （中间那几页没加载），滚动位置计算随之失真。
+   *
+   * 不动 todo 板：它是会话级产物（由完整消息推导），窗口替换只是换了可见范围，
+   * 不是会话内容变了——与 `prependMessages` 的口径一致。
+   */
+  replaceMessages: (
+    sessionId: string,
+    messages: ChatMessage[],
+    historyCursor: string | null,
+  ) => void
   /** 置会话 hydrate 落定标志：ChatView 的 GET /messages 落定后调用，放行 useAcpChat 缓冲。 */
   setHydrated: (sessionId: string, hydrated: boolean) => void
   /** 断连标记：本页面生命周期内该会话 WS 断过（广播无补发，store 可能陈旧）。
@@ -1364,9 +1380,17 @@ export const useChatStore = create<ChatStore>((set, getStore) => ({
       })
     }),
 
+  replaceMessages: (sessionId, messages, historyCursor) =>
+    set((state) =>
+      patch(state, sessionId, {
+        messages: dropInlinedSystemMessages(messages),
+        historyCursor,
+        loadingHistory: false,
+      }),
+    ),
+
   setHydrated: (sessionId, hydrated) =>
     set((state) => patch(state, sessionId, { hydrated })),
-
   setNeedsCatchUp: (sessionId, needs) =>
     set((state) => patch(state, sessionId, { needsCatchUp: needs })),
 

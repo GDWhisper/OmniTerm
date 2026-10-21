@@ -2377,6 +2377,199 @@ input[type="range"]:active::-webkit-slider-thumb {
   animation: chat-msg-flash 1.5s ease-out forwards;
 }
 
+/* 定位闪烁（assistant 行）：助手消息没有单一气泡外壳（正文由多个 block 组成），
+   故 ring 打在**行**上；用户消息仍打在气泡上（.chat-msg-flash，既有机制）。
+   两者共用 ChatView 的 highlightedMessageId 状态——「指向某条消息」只有一条通道。 */
+@keyframes chat-msg-row-flash {
+  0% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+.chat-msg-row.chat-msg-row-flash {
+  animation: chat-msg-row-flash 1.5s ease-out forwards;
+}
+
+/* ── 聊天面板内的会话内搜索（F06）─────────────────────────────
+   浮层本体走 .pixel-float（2px 边框 + 4px 硬阴影，§6.1）；本块只管布局与控件态。
+   位置：聊天面板根容器右上角（绝对定位），延迟展开——不占布局、不遮消息主体。
+   z-index 30 = 聊天面板自有浮层档（与「上次输入」卡片 / 「回到底部」同层），
+   低于 Modal 弹窗层（§6.4 阶梯：Modal 50 > 面板浮层 30）。 */
+.chat-search {
+  position: absolute;
+  top: 34px;
+  right: 8px;
+  z-index: 30;
+  width: 320px;
+  max-width: calc(100% - 16px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  font-family: var(--reader-font);
+  animation: chat-search-drop 0.15s ease-out;
+}
+
+@keyframes chat-search-drop {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.chat-search-input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.chat-search-icon {
+  display: inline-flex;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.chat-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 0 6px;
+  outline: none;
+}
+
+.chat-search-input:focus {
+  border-color: var(--accent);
+}
+
+.chat-search-input::placeholder {
+  color: var(--text-faint);
+}
+
+.chat-search-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chat-search-close:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.chat-search-results {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.chat-search-hit {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-search-hit.is-selected,
+.chat-search-hit:hover {
+  background: var(--accent-14);
+}
+
+.chat-search-hit-time {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.chat-search-hit-snippet {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+/* 命中词高亮：accent 底 + accent 字（与消息内高亮区分——这是检索结果的标记）。 */
+.chat-search-mark {
+  background: var(--accent-14);
+  color: var(--accent);
+}
+
+/* 状态行：命中数与预算说明（被截断 / 命中过多 / 关键词被丢）——静默截断会让
+   用户以为搜全了，比搜不到更糟（D4）。 */
+.chat-search-status {
+  padding: 3px 8px;
+  font-size: 10px;
+  color: var(--text-faint);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* 面板标题栏内的图标按钮（木底上的浅色描边按钮，§4 面板标题条）。
+   深底浅字是标题栏的既有配色，故用 rgba 白而不是主题色变量。 */
+.panel-title-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid rgba(250, 242, 222, 0.35);
+  border-radius: 0;
+  color: #FAF2DE;
+  cursor: pointer;
+}
+
+.panel-title-bar-btn:hover {
+  background: rgba(250, 242, 222, 0.14);
+}
+
+.panel-title-bar-btn.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-base);
+}
+
+/* 标题栏内的文字按钮（木底浅字小按钮）：与图标按钮同款边框，只是内容是文字。 */
+.panel-title-bar-text-btn {
+  padding: 1px 6px;
+  background: transparent;
+  border: 1px solid rgba(250, 242, 222, 0.35);
+  border-radius: 0;
+  color: #FAF2DE;
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: var(--pixel-tracking-sm);
+  cursor: pointer;
+}
+
+.panel-title-bar-text-btn:hover {
+  background: rgba(250, 242, 222, 0.14);
+}
+
 /* 消息级 hover 操作（编辑 / 重新生成）：默认隐藏，悬停消息行时淡入 */
 .chat-msg-row .chat-msg-actions {
   opacity: 0;

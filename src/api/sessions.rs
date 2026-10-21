@@ -32,6 +32,7 @@ pub fn routes() -> Router<AppState> {
         .route("/sessions/{id}/archive", post(archive_session))
         .route("/sessions/{id}/unarchive", post(unarchive_session))
         .route("/sessions/{id}/messages", get(list_messages))
+        .route("/sessions/{id}/messages/search", get(search_messages))
         .route("/sessions/{id}/messages/sync", post(sync_messages))
         .route("/sessions/external", get(list_external_sessions))
         .route("/sessions/archived", get(list_archived_sessions))
@@ -906,6 +907,9 @@ const MESSAGES_PAGE_MAX_BYTES: usize = 2 * 1024 * 1024;
 struct ListMessagesQuery {
     /// Opaque cursor from a previous response's `nextCursor`; absent = newest page.
     before: Option<String>,
+    /// 定位游标（F06 D7）：以该行为**最新行**取一页（前端据此把消息窗口整体
+    /// 替换到命中处）。与 `before` 互斥。
+    at: Option<String>,
     /// Page size, clamped to [`MESSAGES_PAGE_MAX_LIMIT`].
     limit: Option<usize>,
 }
@@ -913,36 +917,64 @@ struct ListMessagesQuery {
 /// Newest page of a session's chat history, or the page before `?before=<cursor>`.
 /// Messages are oldest-first; `nextCursor` is non-null when older messages remain
 /// (the frontend requests them when the user scrolls to the top).
+///
+/// `?at=<cursor>` instead returns the page whose **newest** row is the cursor row
+/// (F06 定位页）：命中消息通常还没被前端加载，用 `before` 一页页往前翻不可接受。
 async fn list_messages(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(q): Query<ListMessagesQuery>,
 ) -> impl IntoResponse {
-    let before = match q.before.as_deref() {
-        Some(raw) => match crate::acp::chat_persistence::MessageCursor::parse(raw) {
-            Some(c) => Some(c),
-            // Reject rather than silently serving the newest page: a client that keeps
-            // getting page 1 back would paginate forever.
-            None => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "malformed before cursor" })),
-                );
-            }
-        },
-        None => None,
-    };
+    if q.before.is_some() && q.at.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "before and at are mutually exclusive" })),
+        );
+    }
     let limit = q.limit.unwrap_or(MESSAGES_PAGE_DEFAULT_LIMIT).min(MESSAGES_PAGE_MAX_LIMIT);
 
-    match crate::acp::chat_persistence::list_messages_page(
-        &state.db,
-        &id,
-        before.as_ref(),
-        limit,
-        MESSAGES_PAGE_MAX_BYTES,
-    )
-    .await
-    {
+    // 定位页与普通分页两条取页路径共用同一套响应装配。
+    let page = if let Some(raw) = q.at.as_deref() {
+        let at = match crate::acp::chat_persistence::MessageCursor::parse(raw) {
+            Some(c) => c,
+            None => {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": "malformed at cursor" })));
+            }
+        };
+        crate::acp::chat_persistence::list_messages_page_at(
+            &state.db,
+            &id,
+            &at,
+            limit,
+            MESSAGES_PAGE_MAX_BYTES,
+        )
+        .await
+    } else {
+        let before = match q.before.as_deref() {
+            Some(raw) => match crate::acp::chat_persistence::MessageCursor::parse(raw) {
+                Some(c) => Some(c),
+                // Reject rather than silently serving the newest page: a client that keeps
+                // getting page 1 back would paginate forever.
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "malformed before cursor" })),
+                    );
+                }
+            },
+            None => None,
+        };
+        crate::acp::chat_persistence::list_messages_page(
+            &state.db,
+            &id,
+            before.as_ref(),
+            limit,
+            MESSAGES_PAGE_MAX_BYTES,
+        )
+        .await
+    };
+
+    match page {
         Ok(page) => {
             let messages: Vec<serde_json::Value> = page
                 .rows
@@ -992,6 +1024,62 @@ async fn list_messages(
                     "agentLive": agent_live,
                 })),
             )
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))),
+    }
+}
+
+/// 会话内全文检索的查询参数。
+#[derive(serde::Deserialize)]
+struct SearchMessagesQuery {
+    /// 空格分隔的关键词（AND 语义：每个词都要在同一行出现，位置任意）。
+    q: String,
+    /// 返回条数上限（后端另有硬上限 `MAX_SEARCH_RESULTS`）。
+    limit: Option<usize>,
+}
+
+/// 会话内全文检索（F06，计划 docs/dev/plans/2026-10-21-acp-chat-fulltext-search.md）。
+///
+/// 搜的是**整个会话的消息库**（不是前端已加载的那几页）——命中未加载的消息时
+/// 前端拿 `cursor` 去请求定位页（`?at=`）把窗口挪过去。
+///
+/// 响应如实带上扫描预算的账：`scannedRows` / `scannedBytes` / `truncated` /
+/// `termsTruncated`——**静默截断会让用户以为搜全了**，比搜不到更糟（D4）。
+async fn search_messages(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<SearchMessagesQuery>,
+) -> impl IntoResponse {
+    let terms: Vec<String> = q.q.split_whitespace().map(|s| s.to_string()).collect();
+    if terms.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "empty query" })));
+    }
+    let limit = q
+        .limit
+        .unwrap_or(crate::acp::chat_persistence::MAX_SEARCH_RESULTS)
+        .min(crate::acp::chat_persistence::MAX_SEARCH_RESULTS);
+
+    match crate::acp::chat_persistence::search_session_messages(
+        &state.db,
+        &id,
+        &terms,
+        crate::acp::chat_persistence::MAX_SEARCH_ROWS,
+        crate::acp::chat_persistence::MAX_SEARCH_BYTES,
+    )
+    .await
+    {
+        Ok(mut result) => {
+            // 客户端要更少的条数时截断，并把「还有更多」如实标出来——
+            // 否则 UI 会拿 matchCount 说「共 N 条」却只列出更少的条数。
+            if result.hits.len() > limit {
+                result.hits.truncate(limit);
+                result.more_matches = true;
+            }
+            // 直接序列化结构体（字段名由 `#[serde(rename_all = "camelCase")]` 决定）——
+            // 手工 json! 映射会与结构体漂移（前端按 camelCase 读）。
+            let body =
+                serde_json::to_value(&result).unwrap_or_else(|e| json!({ "error": e.to_string() }));
+            (StatusCode::OK, Json(body))
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))),
     }

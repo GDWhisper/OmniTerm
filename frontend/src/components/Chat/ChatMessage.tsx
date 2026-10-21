@@ -1395,7 +1395,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   return (
     <div
       ref={rowRef}
-      className="chat-msg-row"
+      className={`chat-msg-row${highlighted ? ' chat-msg-row-flash' : ''}`}
       data-chat-msg-id={message.id}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
