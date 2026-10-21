@@ -33,11 +33,12 @@
 
 ## 通知功能 ⚪
 
-- [ ] **任务状态通知** — 当终端任务发生以下情况时，向用户发送通知：
-  - 任务完成
-  - 任务意外中断（异常退出）
-  - 任务死循环（长时间无输出或 CPU 占用异常）
-  - ⚠️ 待定：具体检测方式（轮询 tmux pane 状态 / hook / 资源监控）
+- [x] **任务状态通知（浏览器通道，2026-10-21）** — agent 回合结束（done）/ 出错（error）/ 需要审批（decision）三类事件走浏览器桌面通知（`Notification` API），计划见 `docs/dev/plans/2026-10-21-browser-desktop-notification.md`。
+  - 通知**只含会话名 + 事件类型**，不含 agent 回复正文（OS 通知在锁屏明文显示）。
+  - 开关在 Settings → 通知（localStorage，不落 settings 表——通知权限是浏览器级状态）；能力/权限态如实展示，不可用时写明原因（主部署形态「局域网 IP + 明文 http」不是 secure context，浏览器不提供该能力）。
+  - 多标签页去重（BroadcastChannel，先声明者发）。
+  - 站内通知（侧栏红点 + 提示音 + tab 标题闪）**不受影响**，两条通道并存。
+  - ⚠️ 未覆盖：webhook / 服务端推送（依赖 X11 settings 共享助手）、pty 侧「死循环 / 长时间无输出」判定（需改 feed 热路径）、通知点击跳转。
 
 
 ## ACP 会话 ⚪

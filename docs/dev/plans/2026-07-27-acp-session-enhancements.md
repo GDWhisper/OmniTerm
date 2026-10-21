@@ -1,6 +1,6 @@
 # ACP 会话功能增强计划
 
-> 状态：**P0/P1 主体已完成** — F01/F02/F03/F04 Phase A 已落地（2026-07-27）；F09 被后续计划重做（agent 侧标题回填，见 `2026-10-16-session-title-backfill.md`）；**F05/F06/F07/F08 于 2026-10-21 拆为四份独立计划**（见下表），本文不再承载其实施
+> 状态：**P0/P1 主体已完成** — F01/F02/F03/F04 Phase A 已落地（2026-07-27）；F09 被后续计划重做（agent 侧标题回填，见 `2026-10-16-session-title-backfill.md`）；**F05/F06/F07/F08 于 2026-10-21 拆为四份独立计划**（见下表），本文不再承载其实施——其中 **F07（桌面通知）与 F08（Markdown 导出）已于 2026-10-21 实施完毕**，F05 / F06 仍是设计稿
 > 触发条件：2026-07-27 功能审查，对比业界主流产品（Cursor / Cline / Aider / Copilot Chat / Claude Code）识别出高中优先级缺口
 > 关联：`docs/dev/plans/archive/2026-07-20-acp-quality-gap.md`（测试基建）、`docs/architecture/frontend-patterns.md`（新组件模式）
 >
@@ -10,7 +10,7 @@
 > |---|---|---|
 > | F05 | 检查点 / 回滚 | **重做**：`docs/dev/plans/2026-10-21-acp-turn-checkpoint-rollback.md`（原 §3.5 的 git 语义与触发时机均不成立，见该文 §1 + 本文 §3.5 勘误） |
 > | F06 | 会话内搜索 | `docs/dev/plans/2026-10-21-acp-chat-fulltext-search.md` |
-> | F07 | 浏览器桌面通知 | `docs/dev/plans/2026-10-21-browser-desktop-notification.md` |
+> | F07 | 浏览器桌面通知 | `docs/dev/plans/2026-10-21-browser-desktop-notification.md`（**2026-10-21 已实施**） |
 > | F08 | 会话导出 Markdown | `docs/dev/plans/archive/2026-10-21-acp-session-markdown-export.md`（**2026-10-21 已实施**） |
 
 ---
@@ -51,7 +51,7 @@
 | 序号 | 功能 | 要点 | 预估 |
 |------|------|------|------|
 | F06 | 会话内搜索 | Ctrl+F 唤起搜索栏，匹配消息文本，高亮 + 跳转 | 1d |
-| F07 | 浏览器桌面通知 | attention 事件（done / error / decision）触发 `Notification` API；设置面板开关 | 0.5d |
+| F07 | 浏览器桌面通知 | attention 事件（done / error / decision）触发 `Notification` API；设置面板开关（**已实施 2026-10-21**，入口在 Settings → 通知） | 0.5d |
 | F08 | 会话导出 Markdown | ChatView 工具栏按钮，将结构化 blocks 序列化为 Markdown 下载（**已实施 2026-10-21**） | 0.5d |
 | F09 | 自动会话标题 | 首次 prompt_done 后取用户消息前 40 字符作为 session name（调 rename API）；可选手动覆盖 | 0.5d |
 | F10 | 上下文窗口组成可视化 | 用量环 hover 展示分类占比（system / history / tool output）；依赖 agent 是否上报细分 usage，不支持时降级为当前总量展示 | 1d |

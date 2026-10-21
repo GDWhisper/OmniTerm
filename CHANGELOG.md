@@ -53,6 +53,8 @@ Prefix each entry with the area it affects:
 
 - (2026-10-21 03:07) `[frontend]` ACP 会话可导出为 Markdown 文件：侧栏会话右键/长按菜单新增「导出为 Markdown」项（仅 ACP 会话显示——终端会话没有聊天历史），点击后独立分页拉取该会话的**全部**历史（不复用界面上已加载的页——那只有首屏与用户上拉过的页，复用会产出「看起来完整、其实缺了前半段」的导出件），正文复用单条「复制为 Markdown」的序列化规则逐条拼装；导出件头部写明导出时刻、图片只有缩略图（原图不落库）、thinking 不导出与工具输出截断口径；条数与体积双上限触顶时保留最新的一段并显式标注省略量，图片按剩余预算内联 data URI 或降级为可见占位符；导出件文案跟随界面语言（会话级导出与消息级「复制为 Markdown」共用同一套本地化文案）（`frontend/src/utils/sessionMarkdown.ts`、`frontend/src/utils/sessionExport.ts`、`frontend/src/utils/markdownI18n.ts`、`frontend/src/hooks/useSessionExport.ts`、`frontend/src/components/Sidebar/SessionContextMenu.tsx`）
 
+- (2026-10-21 09:30) `[frontend]` agent 回合结束 / 出错 / 需要审批时可弹**浏览器桌面通知**（OS 级 `Notification` API），设置入口在 设置 → 通知：通知**只含会话名与事件类型，不含 agent 回复正文**（OS 通知在锁屏明文显示，正文可能含代码/路径/凭据）；触发判据为「用户是否在眼前」（非当前会话，或当前会话但标签页已隐藏——用户切去了别的应用；只按「非当前会话」判会误杀主场景，因为 ACP 的 WebSocket 按会话建立、回合事件只在用户正看着该会话时到达）；桌面通知已启用且已授权时不再叠加 OmniTerm 自己的提示音（避免双响），站内提醒（侧栏红点 + 提示音 + 标签页标题闪烁）不受影响；多标签页同时打开同一会话时只弹一条（BroadcastChannel 先声明者发）；能力与权限态在设置里如实展示——主部署形态以明文 http 访问局域网 IP 时浏览器不提供该能力，开关置灰并写明原因，权限被拒则给出「重新请求」入口，杜绝「用户以为开了、其实没生效」；开关存 localStorage（通知权限是浏览器级状态，跨设备无法共享）（`frontend/src/utils/desktopNotification.ts`、`frontend/src/components/Attention/AttentionProvider.tsx`、`frontend/src/components/Settings/DesktopNotificationSection.tsx`）
+
 ### Fixed
 
 - (2026-10-20 21:20) `[frontend]` 修复 ACP 一段运行过程未随工作块折叠：ACP 线格式的 `current_mode_update` 字段是 `currentModeId`，前端只认 `mode`，导致模式通知退化成独立 SYSTEM 消息、打断 assistant 尾部并把同一 turn 拆成多条消息；前一条消息最后一段 text 之后的思考/工具/权限块因此永远露在折叠容器外。现兼容 `currentModeId` / `current_mode_id` / `mode`，形状不认识时丢弃而非造 SYSTEM 消息；`turn_snapshot` 同时收编本轮所有 streaming 分身并落到末尾，避免旧分身成为孤儿段（`frontend/src/hooks/useAcpChat.ts`、`frontend/src/stores/chatStore.ts`）

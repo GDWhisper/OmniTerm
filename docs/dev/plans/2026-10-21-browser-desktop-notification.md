@@ -1,8 +1,75 @@
 # 浏览器桌面通知（ACP attention 事件 → Notification API）
 
-> 状态：**设计稿**（2026-10-21）
-> 触发条件：改 `frontend/src/components/Attention/AttentionProvider.tsx`、`useAcpChat` 的 attention 触发点、动 Settings 通知开关，或新增浏览器通知能力前**必读**
+> 状态：**已实施**（2026-10-21）——实施偏差见 §0.2（D6 判据补「标签页隐藏」豁免、设置项独立成文件、新增「通知」分类页）
+> 触发条件：改 `frontend/src/components/Attention/AttentionProvider.tsx`、`frontend/src/utils/desktopNotification.ts`、`useAcpChat` 的 attention 触发点、动 Settings 通知开关，或新增浏览器通知能力前**必读**
 > 关联：`docs/dev/plans/2026-07-27-acp-session-enhancements.md` F07（本文是它的落地计划）、`docs/dev/plans/backlog/improvement-directions-remaining.md` X01（本文承担 X01 的「浏览器通道」半边）、`docs/dev/performance-and-safety.md` §S3
+
+## 0. 实施记录（2026-10-21）
+
+### 0.1 落地文件
+
+| 文件 | 作用 |
+|---|---|
+| `frontend/src/utils/desktopNotification.ts` | 能力探测（D3）+ 发送（D9 失败降级）+ 跨标签页去重（D5 BroadcastChannel 声明-裁决）+ 开关就绪判定（D7 用） |
+| `frontend/src/components/Attention/AttentionProvider.tsx` | 唯一触发点接线（D1）：`fire` 内按 D6/D7 决定发桌面通知 or 响 ping；文案组装（会话名 + 事件类型，D2） |
+| `frontend/src/components/Settings/DesktopNotificationSection.tsx` | 设置项：开关（用户意图）+ 能力/权限态行（现实）+ 被拒时的「重新请求」（D4） |
+| `frontend/src/stores/appStore.ts` | `desktopNotificationEnabled` + setter（localStorage `omniterm_desktop_notification`，D8） |
+| `frontend/src/utils/sessionLookup.ts` | `findSessionById`（通知标题要会话显示名；顺手把 Layout/ChatView 里重复的 `Object.values(sessions).flat().find(...)` 收敛为单一真源，禁 Copy-Paste 红线） |
+| `frontend/src/locales/{zh,en}/translation.json` | 设置项文案 + 通知正文（`notification.body` / `notification.event.*`） |
+
+### 0.2 实施偏差
+
+1. **D6 判据补「标签页隐藏」豁免**（唯一的实质性偏差）。
+   D6 字面判据是 `activeSessionKeyRef.current !== sessionKey`（与既有 ping 同源）。实施时
+   发现该判据在主场景里会**误杀**：ACP 的 WS 是**按会话**建的（`/api/v1/ws/acp/{sid}`，
+   切换会话即拆除，见 `hooks/useAcpChat.ts` 的 effect 依赖 `[sessionId]`），故 ACP 回合的
+   done / decision 事件**只在用户正看着该会话时到达**；而「用户正看着会话」又恰被 D6
+   字面判据挡掉——功能等于在主场景永不触发（只有终端侧 agent 轮询路径能触发）。
+   故判据改为「**用户是否在眼前**」：① 非当前会话；② 当前会话但 `document.hidden`
+   （他已切到别的应用/窗口，标题闪的目标签栏在别的窗口里根本看不见）。
+   `document.hidden` 正是本仓既有的「用户不在眼前」信号（tab 标题闪烁用的就是它），
+   与 D6 的**意图**（「不打扰用户正看着的会话」）一致，只是把「正看着」从
+   「会话是当前会话」修正为「人还在屏幕前」。D7 的 ping 抑制口径同步按此判据执行。
+2. **设置项独立成文件**（计划 Phase 3 写的是「`Settings.tsx`（新 `DesktopNotificationSection`）」）：
+   `Settings.tsx` 已 1043 行，且本区块需要「开关 + 能力态行 + 重新请求按钮」三层结构，
+   `toggleRow.tsx` 的 `ToggleRow` 组件（label+hint+on/off）承载不了 → 独立文件，
+   视觉规格照 `SoundSection` 的同款按钮（`btnBase` + 状态点）。
+3. **新增「通知」分类页**（`settings.category.notifications`）：桌面通知与「音频」是两种
+   提醒通道（自己的 ping vs OS 通知），混在一页会让人以为音效开关管着桌面通知；
+   `audio` 分类已有单 section 先例（`SoundSection`），新增一个单 section 分类同理。
+4. **开关语义 = 用户意图**（与「权限」分开陈述）：权限被拒时开关**不弹回 OFF**，
+   状态行以危险色如实写「浏览器已拒绝」+ 给「重新请求」入口。理由：把开关强行弹回
+   OFF 只会让用户更困惑（他确实想要），而「静默无效」由状态行明确挡住。
+5. **去重表容量上限**（64 条 + 过期清理）：计划未提，但 `docs/dev/performance-and-safety.md`
+   §P1「一切 push/append/collect 必须有显式上限」——长跑标签页不能无界累积。
+
+### 0.3 验收对照
+
+- [x] 打开开关 → 浏览器弹权限框 → 允许后，agent 回合结束（done）弹出系统通知，**标题含会话名、不含 agent 正文**（D2）
+      —— Chromium 实测：标题 = 会话显示名，正文 = `OmniTerm · Finished`；组件测试断言正文不含 agent 正文
+- [x] error / decision（需要审批）两类事件同样有通知
+      —— 三个触发点共用同一条 `fire` 路径（`useAcpChat.ts` 的 `prompt_done` / `prompt_error` / `permission_request`），组件测试覆盖 done/error
+- [x] 用户正盯着该会话时**不弹**通知（D6）
+      —— 组件测试：会话可见时零通知、零 ping；**标签页隐藏时**按 §0.2-1 发通知（用户已离开屏幕）
+- [x] 桌面通知已启用时**不再叠加** OmniTerm 自己的 ping 声（D7）
+      —— 组件测试：已启用+已授权 → `playPing` 未被调用；未启用/未授权 → ping 照旧
+- [x] 两个标签页同时打开同一会话，一次事件**只弹一条**（D5）
+      —— 单测用第二个 `BroadcastChannel` 发更早的声明，本标签页据此静默（先到者发、后到者静默）
+- [x] 权限被拒 → UI 如实显示「浏览器已拒绝」+ 重新请求入口；**不静默无效**（D4）
+      —— 设置面板组件测试 + Chromium 实测（能力态行显示 Granted / 未授权 / 已拒绝三态）
+- [x] 非 secure context（局域网 IP + http）→ 开关置灰并**写明原因**（D3）
+      —— 判据以 `'Notification' in window` 为主（非安全上下文根本不暴露构造器），
+        `isSecureContext === false` 只用于把原因写成人话（单元测试覆盖两条路径）
+- [x] 发送抛错不影响 turn 收尾，且日志可查（D9）
+      —— `console.warn` + 返回 false，调用方不感知
+- [x] 刷新页面后开关态保持（localStorage，D8）
+- [x] `cd frontend && pnpm lint` / `pnpm exec tsc -b` / `pnpm test` 零新增警告
+
+**真实浏览器端到端**（Chromium + Playwright）：设置 → 通知页 → 开关置 ON（用户手势内
+请求权限，能力态显示 Granted）→ 制造一次真实 agent 事件（改 tmux session 的
+`@omniterm_agent` 选项 → 侧栏轮询判定为新事件 → `fire('done')`）→ 浏览器
+`Notification` 构造调用：`{title: "lt_790ea5bf", body: "OmniTerm · Finished"}` ✓
+
 
 ## 1. 背景
 
@@ -92,16 +159,13 @@
 
 ## 5. 验收标准
 
-- [ ] 打开开关 → 浏览器弹权限框 → 允许后，agent turn 结束（done）弹出系统通知，**标题含会话名、不含 agent 正文**（D2）
-- [ ] error / decision（需要审批）两类事件同样有通知
-- [ ] 用户正盯着该会话时**不弹**通知（D6）
-- [ ] 桌面通知已启用时**不再叠加** OmniTerm 自己的 ping 声（D7）
-- [ ] 两个标签页同时打开同一会话，一次事件**只弹一条**（D5）
-- [ ] 权限被拒 → UI 如实显示「浏览器已拒绝」+ 重新请求入口；**不静默无效**（D4）
-- [ ] 非 secure context（局域网 IP + http）→ 开关置灰并**写明原因**（D3）
-- [ ] 发送抛错不影响 turn 收尾，且日志可查（D9）
-- [ ] 刷新页面后开关态保持（localStorage，D8）
-- [ ] `cd frontend && pnpm lint` / `pnpm exec tsc -b` / `pnpm test` 零新增警告
+> 实施后的逐条对照见 §0.3（原验收清单已逐条勾验并附证据，此处不再重复）。
+>
+> 原始清单（2026-10-21 计划稿）：打开开关 → 浏览器弹权限框 → 允许后 agent turn
+> 结束弹出系统通知（标题含会话名、不含 agent 正文）；error / decision 同样有通知；
+> 用户正盯着该会话时不弹；桌面通知已启用时不叠加 ping；多标签页只弹一条；权限被拒
+> 如实显示 + 重新请求入口；非 secure context 开关置灰并写明原因；发送抛错不影响
+> turn 收尾且日志可查；刷新后开关态保持；lint / tsc / test 零新增警告。
 
 ## 6. 风险与缓解
 
@@ -118,8 +182,9 @@
 
 实施完成后需更新：
 
-- `docs/architecture/frontend.md` — `utils/` 补 `desktopNotification.ts`；`Attention/` 目录说明补桌面通知通道与能力探测口径
-- `docs/dev/plans/backlog/improvement-directions-remaining.md` — X01 标注「浏览器通道已落地」，剩余缺口收敛为 webhook / pty 侧静默判定（并注明依赖 X11）
-- `docs/dev/plans/2026-07-27-acp-session-enhancements.md` — F07 标注已实施 + 指向本文
-- `CHANGELOG.md` — **需加条目**
-- 注：`docs/reference/requirements.md`「通知功能 ⚪」条目可一并勾上「任务完成 / 意外中断」两小项（pty 侧检测仍未做）
+- `docs/architecture/frontend.md` — `utils/` 补 `desktopNotification.ts` / `sessionLookup.ts`；`Attention/` 目录说明补桌面通知通道与能力探测口径 ✅
+- `docs/visual-design/ui-style-guide.md` — §8 Settings Toggles 表补桌面通知开关（localStorage 键与默认态）✅
+- `docs/dev/plans/backlog/improvement-directions-remaining.md` — X01 标注「浏览器通道已落地」，剩余缺口收敛为 webhook / pty 侧静默判定（并注明依赖 X11）✅
+- `docs/dev/plans/2026-07-27-acp-session-enhancements.md` — F07 标注已实施 + 指向本文 ✅
+- `docs/reference/requirements.md` —「通知功能 ⚪」条目勾上「任务完成 / 意外中断」两小项（pty 侧检测仍未做）✅
+- `CHANGELOG.md` — **需加条目** ✅

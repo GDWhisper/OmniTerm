@@ -749,6 +749,7 @@ Effect toggles in the Settings panel, each persisted to localStorage（下表只
 | CRT Scanlines | `omniterm_crt_scanlines` | `false` | CRT scanline overlay (Phase 2) |
 | Waiting Animation | `omniterm_thinking_effect_enabled` / `omniterm_thinking_effect` | `true` / `scramble` | ACP 等待 agent 输出时消息流底部的状态行动画（乱码流 / 经典转圈 / 盲文点阵），关闭后不渲染；与像素动效互不联动，注册表见 `frontend/src/utils/thinkingEffects.ts` |
 | Default Terminal Engine | `omniterm_default_terminal_engine` | `tmux` | 新建终端会话与「在此打开终端」的引擎（pty 仍在 beta，故 tmux 兜底） |
+| Desktop Notifications | `omniterm_desktop_notification` | `false` | 桌面通知（Settings → 通知）：agent 回合结束/出错/需审批时弹 OS 级通知，**只含会话名 + 事件类型**（不含 agent 正文）。能力/权限态在同页单独一行如实展示（不可用时写明原因，如「http 非本机地址」） |
 
 Pixel UI and pixel fonts are always active (no toggle).
 
