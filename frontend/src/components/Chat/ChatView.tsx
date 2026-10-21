@@ -22,6 +22,7 @@ import { useToastStore } from '../../stores/toastStore'
 import { decodeStoredBlocks, parseConfigOptions } from '../../hooks/useAcpChat'
 import { postSyncPayload } from '../../utils/syncMessages'
 import { toChatMessages, type StoredMessage } from '../../utils/storedMessages'
+import { findSessionById } from '../../utils/sessionLookup'
 import {
   clearChatScrollMemory,
   getChatScrollMemory,
@@ -89,7 +90,7 @@ export function ChatView() {
   const archivedSessions = useAppStore((s) => s.archivedSessions)
   const activeSession =
     activeSessionId
-      ? (Object.values(sessions).flat().find((s) => s.id === activeSessionId) ??
+      ? (findSessionById(sessions, activeSessionId) ??
         archivedSessions.find((s) => s.id === activeSessionId))
       : null
 

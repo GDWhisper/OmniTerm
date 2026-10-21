@@ -5,6 +5,7 @@ import {
   useRef,
   type ReactNode,
 } from 'react'
+import { useTranslation } from 'react-i18next'
 
 // ── Types ──────────────────────────────────────────────
 
@@ -32,6 +33,13 @@ export interface AttentionContextValue {
 import { AttentionContext } from '../../hooks/useAttention'
 import { playPing } from '../../utils/audioFeedback'
 import { useAppStore } from '../../stores/appStore'
+import { useAgentStore } from '../../stores/agentStore'
+import { sessionDisplayName } from '../../utils/sessionDisplayName'
+import { findSessionById } from '../../utils/sessionLookup'
+import {
+  desktopNotificationReady,
+  sendDesktopNotification,
+} from '../../utils/desktopNotification'
 
 // ── Tab title flash ────────────────────────────────────
 
@@ -74,6 +82,31 @@ if (typeof document !== 'undefined') {
   })
 }
 
+// ── Desktop notification (F07) ───────────────────────────
+
+/**
+ * 桌面通知的文案组装 + 发送（计划 `2026-10-21-browser-desktop-notification.md`）。
+ *
+ * 放在组件外：`fire` 的 deps 为空（长寿命回调），语言 / 会话表 / agent 注册表
+ * 都必须在**调用那一刻**现读——闭包捕获会拿到旧值（语言切换后仍发旧语言的文案）。
+ *
+ * 内容口径（D2）：标题=会话显示名，正文=「OmniTerm · 事件类型」——
+ * **不含 agent 回复正文**（OS 通知在锁屏明文显示，正文可能含代码/路径/凭据）。
+ */
+function notifyDesktop(
+  targetId: string,
+  reason: AttentionReason,
+  t: (key: string, params?: Record<string, unknown>) => string,
+): void {
+  const appState = useAppStore.getState()
+  const session = findSessionById(appState.sessions, targetId)
+  const agents = useAgentStore.getState().agents
+  const unnamed = t('sidebar.unnamed')
+  const title = session ? sessionDisplayName(session, agents, unnamed) : unnamed
+  const body = t('notification.body', { event: t(`notification.event.${reason}`) })
+  void sendDesktopNotification({ title, body, dedupKey: `${targetId}|${reason}` })
+}
+
 // ── Provider ───────────────────────────────────────────
 
 export function AttentionProvider({ children }: { children: ReactNode }) {
@@ -84,6 +117,11 @@ export function AttentionProvider({ children }: { children: ReactNode }) {
   const activeSessionsRef = useRef<Set<string>>(new Set())
   // Suppress sound for the active session
   const activeSessionKeyRef = useRef<string | null>(null)
+  // 桌面通知文案要用当前界面语言，但 `fire` 是长寿命回调（deps 为空）——
+  // 闭包捕获的 `t` 会随语言切换变旧，故用 ref 存最新值（同 useFileDrag 的 optsRef 范式）。
+  const { t } = useTranslation()
+  const tRef = useRef(t)
+  tRef.current = t
 
   const fire = useCallback(
     (targetId: string, sessionKey: string, reason: AttentionReason) => {
@@ -94,7 +132,30 @@ export function AttentionProvider({ children }: { children: ReactNode }) {
       })
 
       // Sound + tab flash (unless this is the active session)
-      if (activeSessionKeyRef.current !== sessionKey) {
+      //
+      // 桌面通知（F07 / 计划 D6、D7）：
+      // - D6：只对「用户当前不在看的会话」发——**判定以「用户是否在眼前」为准**：
+      //   ① 非当前会话（他在看别的会话）；② 当前会话但**标签页隐藏**（他切到别的
+      //   应用/窗口了，标题闪的目标签栏在别的窗口里根本看不见）。
+      //   只用「非当前会话」一条会误杀主场景：ACP 的 WS 只连当前会话（切换会话即
+      //   拆除），故 ACP 回合的 done/decision 事件**只在用户正看着该会话时到达**，
+      //   而「用户正看着会话」时桌面通知又被 D6 字面判据挡掉——功能在主场景里
+      //   等于永不触发。`document.hidden` 正是本仓既有的「用户不在眼前」信号
+      //   （tab 标题闪烁用的就是它），故在此开口子。
+      // - D7：桌面通知自带系统音效，**已启用且已授权时不再叠加自己的 ping**（双响）；
+      //   未启用/未授权时维持现状铃声。
+      // 开关（用户意图，读 store）与权限（浏览器状态，现读不缓存）都要满足。
+      const desktopReady =
+        useAppStore.getState().desktopNotificationEnabled && desktopNotificationReady()
+      const isActiveSession = activeSessionKeyRef.current === sessionKey
+      if (isActiveSession) {
+        // 当前会话：既有语义不响 ping（他在看，无需打扰）。
+        if (document.hidden && desktopReady) {
+          void notifyDesktop(targetId, reason, tRef.current)
+        }
+      } else if (desktopReady) {
+        void notifyDesktop(targetId, reason, tRef.current)
+      } else {
         playPing()
       }
       if (document.hidden) {

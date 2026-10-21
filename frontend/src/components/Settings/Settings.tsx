@@ -15,6 +15,7 @@ import { AgentSettings } from './AgentSettings'
 import { AiCommitSection } from './AiCommitSection'
 import { AuthSection } from './AuthSection'
 import { AuditLogSection } from './AuditLogSection'
+import { DesktopNotificationSection } from './DesktopNotificationSection'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { SectionTitle, ToggleRow } from './toggleRow'
 import { btnBase } from './settingsStyles'
@@ -935,7 +936,7 @@ function AboutSection() {
 /* ── Category config: which sections appear in which tab ── */
 
 type SectionComponent = React.FC
-type CategoryId = 'appearance' | 'audio' | 'auth' | 'terminal' | 'sessions' | 'git' | 'language' | 'mobile' | 'agents'
+type CategoryId = 'appearance' | 'audio' | 'notifications' | 'auth' | 'terminal' | 'sessions' | 'git' | 'language' | 'mobile' | 'agents'
 
 interface Category {
   id: CategoryId
@@ -964,6 +965,13 @@ const CATEGORIES: Category[] = [
     id: 'audio',
     labelKey: 'settings.category.audio',
     groups: [[SoundSection]],
+  },
+  {
+    // 通知（桌面通知走浏览器 Notification API，与「音频」是两种提醒通道，
+    // 各自独立：声音是 OmniTerm 自己的 ping，桌面通知是 OS 级通知）。
+    id: 'notifications',
+    labelKey: 'settings.category.notifications',
+    groups: [[DesktopNotificationSection]],
   },
   {
     id: 'auth',

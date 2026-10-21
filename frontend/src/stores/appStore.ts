@@ -225,6 +225,18 @@ export interface AppState {
   soundCoinEnabled: boolean
   soundStompEnabled: boolean
   soundPingEnabled: boolean
+  /**
+   * 浏览器桌面通知开关（`Notification` API）。
+   *
+   * 存 localStorage 而非 settings 表（D8）：通知权限本身是**浏览器级**状态，
+   * 跨设备无法共享，落库没有语义优势；且落表要 X11（settings 共享读写助手）前置。
+   *
+   * 语义是**用户意图**（想不想收桌面通知），不是「现在能不能收」——后者由
+   * 浏览器权限决定，在设置面板里如实展示为独立状态行（见
+   * `components/Settings/DesktopNotificationSection.tsx`）。默认关：开启要走
+   * 浏览器权限弹窗，属于必须显式 opt-in 的能力。
+   */
+  desktopNotificationEnabled: boolean
   crtScanlines: boolean
   parchmentTextureEnabled: boolean
   /** Pixel display font (BETA). Off = pixel text falls back to reader font;
@@ -307,6 +319,7 @@ export interface AppState {
   setSoundCoinEnabled: (v: boolean) => void
   setSoundStompEnabled: (v: boolean) => void
   setSoundPingEnabled: (v: boolean) => void
+  setDesktopNotificationEnabled: (v: boolean) => void
   setCrtScanlines: (v: boolean) => void
   setParchmentTextureEnabled: (v: boolean) => void
   setExpandThinking: (v: boolean) => void
@@ -426,6 +439,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   soundCoinEnabled: localStorage.getItem('omniterm_sound_coin_enabled') !== 'false',
   soundStompEnabled: localStorage.getItem('omniterm_sound_stomp_enabled') !== 'false',
   soundPingEnabled: localStorage.getItem('omniterm_sound_ping_enabled') !== 'false',
+  desktopNotificationEnabled: localStorage.getItem('omniterm_desktop_notification') === 'true',
   crtScanlines: localStorage.getItem('omniterm_crt_scanlines') === 'true',
   expandThinking: localStorage.getItem('omniterm_expand_thinking') === 'true',
   thinkingCollapsedMode: readThinkingCollapsedMode(),
@@ -713,6 +727,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSoundPingEnabled: (v) => {
     localStorage.setItem('omniterm_sound_ping_enabled', String(v))
     set({ soundPingEnabled: v })
+  },
+  setDesktopNotificationEnabled: (v) => {
+    localStorage.setItem('omniterm_desktop_notification', String(v))
+    set({ desktopNotificationEnabled: v })
   },
   setCrtScanlines: (v) => {
     localStorage.setItem('omniterm_crt_scanlines', String(v))

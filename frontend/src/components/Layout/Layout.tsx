@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore, MIN_SIDEBAR_WIDTH, type AppState } from '../../stores/appStore'
 import { useAgentStore } from '../../stores/agentStore'
 import { sessionDisplayName } from '../../utils/sessionDisplayName'
+import { findSessionById } from '../../utils/sessionLookup'
 import { Sidebar } from '../Sidebar/Sidebar'
 import { Terminal } from '../Terminal/Terminal'
 import { ChatView } from '../Chat/ChatView'
@@ -35,7 +36,7 @@ function SessionView() {
   // archivedSessions 兜底解析，否则会卡在下方 loading 占位。
   const archivedSessions = useAppStore((s) => s.archivedSessions)
   const activeSession = activeSessionId
-    ? (Object.values(sessions).flat().find((s) => s.id === activeSessionId) ??
+    ? (findSessionById(sessions, activeSessionId) ??
       archivedSessions.find((s) => s.id === activeSessionId))
     : null
 
@@ -347,9 +348,7 @@ function sessionViewKey(
   activeExternalSession: string | null,
 ): string {
   if (activeExternalSession) return 'external'
-  const active = activeSessionId
-    ? Object.values(sessions).flat().find((s) => s.id === activeSessionId)
-    : null
+  const active = findSessionById(sessions, activeSessionId) ?? null
   return active?.runtime_kind ?? 'empty'
 }
 
@@ -463,7 +462,7 @@ function MobileLayout() {
     activateSession(nextId)
   }, [projects, sessions, activeSessionId, activeExternalSession, activateSession])
 
-  const activeSession = Object.values(sessions).flat().find((s) => s.id === activeSessionId)
+  const activeSession = findSessionById(sessions, activeSessionId)
   const agents = useAgentStore((s) => s.agents)
   const activeSessionName =
     (activeSession
