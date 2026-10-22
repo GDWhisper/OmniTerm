@@ -17,7 +17,7 @@
 | `frontend/src/components/Chat/ChatView.tsx` | 标题栏搜索入口 + Ctrl+F；命中跳转（窗口内直跳 / 未加载则拉定位页替换窗口）+ 高亮闪烁 + 「回到最新消息」出口 |
 | `frontend/src/components/Chat/ChatMessage.tsx` | 助手消息行补 `chat-msg-row-flash`（助手消息没有单一气泡外壳，见 §0.2-1） |
 | `frontend/src/stores/chatStore.ts` | 新增 `replaceMessages`（窗口整体替换，D8） |
-| `frontend/src/hooks/useChatShortcuts.ts` | Ctrl/Cmd+F 接入（容器作用域，D11） |
+| `frontend/src/hooks/useChatShortcuts.ts` | Ctrl/Cmd+F 接入（document 冒泡阶段，见 §0.2-8） |
 | `frontend/src/index.css` | `.chat-search*` / `.chat-msg-row-flash` / `.panel-title-bar-btn` / `.panel-title-bar-text-btn` |
 | `frontend/src/locales/{zh,en}/translation.json` | `chat.search.*`（12 个 key，两份同步） |
 
@@ -47,6 +47,20 @@
    写明「仅显示前 N 条」，不静默丢。
 6. **Ctrl+F 再按一次 = 聚焦并全选**（FileEditor 同款口径）：搜索条已开着时再按 Ctrl+F
    不清空查询，只把焦点拉回输入框。
+7. **没有独立入口按钮，Ctrl+F 是唯一入口**（用户实测反馈：标题栏挂放大镜图标与该面板
+   的像素标题条观感违和）。计划 Phase 2 表里那句「标题栏入口（图标 → 点击展开）」是
+   实施时的自行加码，计划本身（D10/D11）只要求「标题栏内联展开 + Ctrl+F 唤起」——
+   去掉按钮后反而更贴计划。连带删除随之失效的 `.panel-title-bar-btn` 样式与
+   `chat.search.open` 文案（禁死代码）。
+8. **Ctrl+F 的绑定从「面板容器」上移到「document 冒泡阶段」**（D11 的字面实现不可用）：
+   实测**焦点在聊天输入框或消息气泡上时，容器上根本收不到 Ctrl+F**——消息区不可聚焦、
+   只读（会话已结束/已释放）会话的输入框是 `disabled`，这两种情况下键盘事件的目标是
+   `body`，冒泡不到面板容器。改挂 document 后才覆盖「用户在读历史、焦点哪儿都没落」
+   这个最常见的使用姿态（实测：焦点在输入框 / 在消息气泡上，Ctrl+F 都能唤起搜索条）。
+   **冒泡阶段还带来一个好处**：有自己 Ctrl+F 的面板（文件编辑器 `FileEditor.tsx`）在
+   **捕获阶段** `stopPropagation`，事件到不了 document —— 它们的 Ctrl+F 不受影响
+   （单测钉住这条）。作用域判定：事件落在聊天面板内、或当前没有任何控件持有焦点
+   （`activeElement` 是 body）时接管；焦点在终端 / 侧栏输入框等别处时不接管。
 
 ### 0.3 验收对照
 
@@ -64,7 +78,9 @@
       —— 后端单测两个预算触顶用例（`truncated=true`）；前端状态行显示「仅搜索了最近 N 行」
 - [x] `system` 角色消息不出现在结果里 —— 单测 `search_excludes_system_rows`
 - [x] Ctrl+F 在聊天面板内打开搜索；文件编辑器内的 Ctrl+F 不受影响
-      —— 容器作用域绑定（`useChatShortcuts`），文件编辑器在编辑器容器内捕获阶段拦截
+      —— 绑在 document **冒泡**阶段（容器收不到「焦点没落在控件上」的事件，见 §0.2-8）；
+        文件编辑器在捕获阶段 stopPropagation → 到不了 document，编辑器里的 Ctrl+F 仍是
+        「编辑器内查找」（单测 + Chromium 实测：焦点在输入框 / 在消息气泡上都能唤起）
 - [x] 切换会话后搜索结果清空、输入框收起 —— 组件测试「切换会话后搜索条收起」
 - [x] `cd frontend && pnpm lint` / `pnpm exec tsc -b` / `pnpm test` 零新增警告
 - [x] `cargo clippy --workspace --all-targets -- -D warnings` 零新增；`cargo test` 全绿

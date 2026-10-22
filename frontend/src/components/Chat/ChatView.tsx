@@ -15,7 +15,7 @@ import { UsageIndicator } from './UsageIndicator'
 import { TodoBoard } from './TodoBoard'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { OverlayScroll } from '../Common/OverlayScroll'
-import { IconArrowDown, IconSearch } from '../FileManager/icons'
+import { IconArrowDown } from '../FileManager/icons'
 import { READER_FONT } from '../../utils/fonts'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
@@ -177,14 +177,16 @@ export function ChatView() {
   // 由下方「装配恢复令牌」layout effect 写入，贴底 layout effect 在 hydrated
   // 后消费一次。
   const pendingScrollRestoreRef = useRef<{ sid: string; top: number } | null>(null)
-  // 会话内搜索（F06）：标题栏入口 / Ctrl+F 打开；命中未加载时拉「定位页」把
-  // 消息窗口整体替换到目标附近（计划 D7/D8）。
+  // 会话内搜索（F06）：Ctrl+F 打开（唯一入口——标题栏不放按钮，与像素标题条违和）；
+  // 命中未加载时拉「定位页」把消息窗口整体替换到目标附近（计划 D7/D8）。
   const [searchOpen, setSearchOpen] = useState(false)
   /** Ctrl+F 的「聚焦并全选」信号（连续 Ctrl+F = 改查下一项，FileEditor 同款口径）。 */
   const [searchFocusRequest, setSearchFocusRequest] = useState(0)
   /** 待跳转的消息 id：命中未加载时，窗口替换后目标气泡才进 DOM——等渲染落定
    *  再滚动 + 闪烁（滚动时机由下方 layout effect 消费）。 */
   const pendingJumpRef = useRef<string | null>(null)
+  /** 聊天面板根容器：供快捷键判定「键盘事件是否落在会话内」。 */
+  const chatRootRef = useRef<HTMLDivElement>(null)
   /** 窗口是否已被替换成「定位页」：此时**更新的消息不在窗口内**（计划 D8 的
    *  既定代价），标题栏给出「回到最新消息」出口——否则用户会卡在一段历史里
    *  （「回到底部」只能回到这个窗口的底）。 */
@@ -757,6 +759,7 @@ export function ChatView() {
   const onKeyDown = useChatShortcuts({
     configOptions: chatState.configOptions,
     setConfigOption,
+    rootRef: chatRootRef,
     onSearch: () => {
       setSearchOpen(true)
       setSearchFocusRequest((n) => n + 1)
@@ -902,6 +905,7 @@ export function ChatView() {
 
   return (
     <div
+      ref={chatRootRef}
       onKeyDown={onKeyDown}
       style={{
         height: '100%',
@@ -943,17 +947,9 @@ export function ChatView() {
             {t('chat.search.backToLatest')}
           </button>
         )}
-        {/* 会话内搜索入口（F06）：图标按钮，点开内联搜索条（延迟展开，不占布局）。 */}
-        <button
-          type="button"
-          className={`panel-title-bar-btn${searchOpen ? ' is-active' : ''}`}
-          onClick={() => setSearchOpen((v) => !v)}
-          title={t('chat.search.open')}
-          aria-label={t('chat.search.open')}
-          aria-pressed={searchOpen}
-        >
-          <IconSearch width={13} height={13} />
-        </button>
+        {/* 会话内搜索（F06）**没有独立入口按钮**：只在焦点落在聊天面板内时用
+            Ctrl/Cmd+F 唤起（计划 D11）。标题栏挂图标按钮与该面板的像素标题条
+            观感违和（用户实测反馈），故入口只留快捷键。 */}
         {/* 用量是会话级状态（上下文占用 / 费用），与 LIVE/DEAD 徽章同类；放在
             配置控制区会既挤占窄屏又把「只报用量不发配置」的 agent 渲染成一条
             只有圆环的配置栏。 */}

@@ -378,7 +378,6 @@
   "chat.thought": "Deep thought",
   "chat.replaying": "Restoring session history…",
   "chat.loadingHistory": "Loading earlier messages…",
-  "chat.search.open": "Search this session",
   "chat.search.placeholder": "Search messages in this session…",
   "chat.search.close": "Close search",
   "chat.search.backToLatest": "Latest messages",

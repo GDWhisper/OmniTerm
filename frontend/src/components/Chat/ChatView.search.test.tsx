@@ -116,10 +116,6 @@ function hasFlash(container: HTMLElement, messageId: string): boolean {
   return !!row.querySelector('.chat-msg-flash') || row.classList.contains('chat-msg-row-flash')
 }
 
-function searchToggle() {
-  return container.querySelector<HTMLButtonElement>('.panel-title-bar-btn')
-}
-
 function searchInput() {
   return container.querySelector<HTMLInputElement>('.chat-search-input')
 }
@@ -133,15 +129,25 @@ async function typeQuery(input: HTMLInputElement, value: string) {
   })
 }
 
+/**
+ * 在聊天面板内派发 Ctrl+F。
+ *
+ * 搜索**没有独立入口按钮**（用户反馈标题栏图标与像素标题条违和，已移除）——
+ * 唯一入口是 Ctrl/Cmd+F，且绑在容器作用域：事件从面板内冒泡才生效（计划 D11）。
+ */
 async function openSearch() {
-  act(() => searchToggle()!.click())
   await act(async () => {
+    container
+      .querySelector<HTMLElement>('.panel-title-bar')!
+      .dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true }),
+      )
     await advanceClock(1)
   })
 }
 
 describe('ChatView 会话内搜索（F06）', () => {
-  it('标题栏入口打开搜索条，输入关键词后列出命中', async () => {
+  it('Ctrl+F（焦点在聊天面板内）打开搜索条，输入关键词后列出命中', async () => {
     seedChatMessages([userMsg('m1', '第一条提问')])
     renderView()
     expect(searchInput()).toBeNull()
@@ -252,6 +258,23 @@ describe('ChatView 会话内搜索（F06）', () => {
     const st = useChatStore.getState().states['s1']
     expect(st?.messages.map((m) => m.id)).toEqual(['m-new'])
     expect(container.querySelectorAll('.panel-title-bar-text-btn')).toHaveLength(0)
+  })
+
+  it('别的面板在捕获阶段拦截 Ctrl+F 时不接管（文件编辑器不受影响）', async () => {
+    seedChatMessages([userMsg('m1', '第一条提问')])
+    renderView()
+    // 模拟文件编辑器（FileEditor.tsx 的做法）：捕获阶段 stopPropagation
+    const other = document.createElement('div')
+    other.addEventListener('keydown', (e) => e.stopPropagation(), true)
+    document.body.appendChild(other)
+    await act(async () => {
+      other.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true }),
+      )
+      await advanceClock(1)
+    })
+    other.remove()
+    expect(searchInput()).toBeNull()
   })
 
   it('切换会话后搜索条收起（不跨会话串结果）', async () => {

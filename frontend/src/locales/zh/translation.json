@@ -378,7 +378,6 @@
   "chat.thought": "深度思考",
   "chat.replaying": "正在恢复会话记录…",
   "chat.loadingHistory": "正在加载更早的记录…",
-  "chat.search.open": "搜索本会话消息",
   "chat.search.placeholder": "搜索本会话的消息…",
   "chat.search.close": "关闭搜索",
   "chat.search.backToLatest": "回到最新消息",
