@@ -31,8 +31,22 @@ import {
   setChatScrollMemory,
 } from '../../utils/chatScrollMemory'
 
-/** 距顶部多少像素内触发加载更早历史（留余量，不等滚到绝对顶部）。 */
-const TOP_LOAD_THRESHOLD_PX = 200
+/**
+ * 距顶部多少「视口高度」以内视为接近顶部、触发预取更早历史（openchamber 同口径：
+ * `HISTORY_PREPEND_NEAR_TOP_VIEWPORTS = 1.5`）。比固定像素贴合不同视口与字号
+ * ——大屏小字号下 200px 太近、手机等窄屏上又太远。
+ *
+ * 这是**预取窗口**：用户还在窗口内时就把更早的一页拉好，等他滚到顶时内容已在。
+ */
+const TOP_LOAD_NEAR_TOP_VIEWPORTS = 1.5
+/**
+ * 「内容确实溢出」的最小余量：scrollHeight 须比 clientHeight 多出这么多才算可滚。
+ *
+ * 与上面的触发窗口是**两个独立的量**，不能混用：若把视口比例也用作溢出余量，
+ * 内容需高出视口 1.5 倍才允许加载，短会话（只比视口高一点点）将完全无法上拉加载
+ * 更早历史——那是功能回退，不是保守。
+ */
+const TOP_LOAD_OVERFLOW_SLACK_PX = 32
 
 /** 「上次输入」条跳转聚焦：目标气泡 ring 闪烁时长（与 index.css 的
  *   .chat-msg-flash 动画时长一致，到期摘 class）。 */
@@ -141,15 +155,55 @@ export function ChatView() {
    * 记下锚点后，只有把视口移到锚点**之上**才算上翻意图。
    */
   const pinnedTopRef = useRef<number | null>(null)
+  /**
+   * 触顶加载更早历史的**滞后锁**（D6），per-会话两个状态：
+   *  · locked——本次加载已发出、尚未解锁。
+   *  · movedUp——自上次加载/补偿以来用户是否**向上**滚过（方向判据）。
+   *
+   * 为什么需要它：前插更早的一页后补偿会把 scrollTop **抬高** delta，若这一页
+   * 不高，补偿自身引发的 scroll 事件仍满足「接近顶部」→ 连锁翻页直到历史耗尽。
+   * `loadingHistory` 只挡得住「请求在飞」，挡不住「请求已落定、视口仍在窗口内」。
+   *
+   * 解锁判据为什么是「方向」而不是「绝对位置」：绝对位置（参考实现的
+   * scrollTop > 20）会被补偿位移污染——补偿抬位后立即误解锁。方向判据无法被
+   * 程序性位移伪造：程序性位移只会把 scrollTop 抬高或等量改写，不产生「向上滚」
+   * （所有程序性写都经 writeScrollTop，基准随之同步）。
+   *
+   * 为什么**不**要求手势（wheel/touchmove）：拖原生滚动条、键盘翻页（PageUp/
+   * 方向键）都不产生手势事件，加手势门槛会把这类用户永久锁死在第一页——那是功能
+   * 回退。改用「位置确实向上移动过」这一等效信号：它同样无法被程序性位移伪造。
+   *
+   * per-会话：ChatView 跨 acp→acp 切换**不重挂载**（Layout 只按 runtime_kind
+   * 做 key），故按 sid 重置而不是指望重挂载。
+   */
+  const topLoadStateRef = useRef<{ sid: string | null; locked: boolean; movedUp: boolean }>({
+    sid: null,
+    locked: false,
+    movedUp: false,
+  })  /** 上一次观测到的 scrollTop：判「用户向上滚」的基准（程序性写也同步它）。 */
+  const lastScrollTopRef = useRef(0)
+  /**
+   * 上一次观测到的 scrollHeight：内容变矮时浏览器会把 scrollTop **夹紧**（向上
+   * 位移），那不是用户滚动，不能算作「向上滚过」。
+   */
+  const lastScrollHeightRef = useRef(0)
+  /**
+   * 程序性写 scrollTop 的唯一入口：写入后同步基准，使「相对上次变小」只可能来自
+   * 用户的向上滚动。
+   */
+  const writeScrollTop = useCallback((el: HTMLElement, top: number) => {
+    el.scrollTop = top
+    lastScrollTopRef.current = el.scrollTop
+  }, [])
   /** 贴底动作的唯一实现（幂等：已在底部时是空操作）。 */
   const pinToBottom = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
-    el.scrollTop = el.scrollHeight
+    writeScrollTop(el, el.scrollHeight)
     // 读回实际位置：浏览器会把 scrollTop 夹到 max，写入值不等于落点。内容不足一屏
     // 时钉底是空操作（scrollTop 恒 0），这种锚点没有区分力，不记。
     if (el.scrollHeight > el.clientHeight) pinnedTopRef.current = el.scrollTop
-  }, [])
+  }, [writeScrollTop])
   // 「上次输入」跳转聚焦：高亮中的消息 id（目标气泡 accent 描边 + ring 闪烁，
   // 经 highlighted prop 传给 ChatMessageView）。
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
@@ -394,6 +448,13 @@ export function ChatView() {
     // cursor 为 null/undefined = 已到历史开头；loadingHistory = 已有请求在飞。
     if (!cursor || st?.loadingHistory) return
     s.beginLoadHistory(sid)
+    // 滞后锁上闩：本次加载发出后禁止再次触发，直到用户自己向上滚过。
+    // 连锁翻页的根因是「前插补偿抬高 scrollTop → 补偿引发的 scroll 事件仍满足
+    // 近顶条件 → 再次触发」；loadingHistory 只挡得住「请求在飞」，挡不住「已落定」。
+    // movedUp 清零：本次加载之前的上滚不代表「看了新一页」，不能用来解锁。
+    const lockState = topLoadStateRef.current
+    lockState.locked = true
+    lockState.movedUp = false
     try {
       const r = await fetch(
         `/api/v1/sessions/${encodeURIComponent(sid)}/messages?before=${encodeURIComponent(cursor)}`,
@@ -408,12 +469,19 @@ export function ChatView() {
     } catch {
       // 网络失败：清 in-flight 但保留游标，用户再次上拉即重试。
       prependAnchorRef.current = null
+      // 失败必须解锁：否则用户再也触发不了重试（触发条件要求「未上闩」）。
+      lockState.locked = false
+      lockState.movedUp = false
       useChatStore.getState().prependMessages(sid, [], cursor)
     }
   }, [activeSessionId])
 
   // 前插补偿：内容变高后把 scrollTop 前移同样的量，视口停在用户原来读的那一行。
   // 必须用 layout effect（在浏览器绘制前改 scrollTop），否则会闪一帧跳动。
+  //
+  // 顺带把滞后锁的基准重置：补偿把视口整体推下 delta，此刻起「用户向上滚过」
+  // 重新从零计——补偿本身不是用户意图，不能算作解锁依据（这正是 D6 的核心防线：
+  // 补偿抬高 scrollTop 后仍落在近顶窗口内，若无锁就会连锁翻页直到历史耗尽）。
   useLayoutEffect(() => {
     const el = scrollRef.current
     const anchor = prependAnchorRef.current
@@ -422,8 +490,9 @@ export function ChatView() {
     // 请求在途时切走了会话：锚点属于上一个会话，丢弃。
     if (anchor.sid !== activeSessionId) return
     const delta = el.scrollHeight - anchor.scrollHeight
-    if (delta !== 0) el.scrollTop += delta
-  }, [chatState.messages, activeSessionId])
+    if (delta !== 0) writeScrollTop(el, el.scrollTop + delta)
+    const lockState = topLoadStateRef.current
+    if (lockState.sid === anchor.sid) lockState.movedUp = false  }, [chatState.messages, chatState.loadingHistory, activeSessionId, writeScrollTop])
 
   // 「浏览位置记忆」装配：进入会话时把上次离开的位置装进一次性令牌，交给下方
   // 贴底 layout effect 在 hydrated 后消费。**必须声明在贴底 effect 之前**——同一
@@ -461,7 +530,7 @@ export function ChatView() {
         const maxTop = el.scrollHeight - el.clientHeight
         if (maxTop > 0) {
           const top = Math.max(0, Math.min(pending.top, maxTop))
-          el.scrollTop = top
+          writeScrollTop(el, top)
           // 回写夹紧后的实际值（同时刷新新鲜度）：内容变矮时下次以实际位置为准。
           setChatScrollMemory(activeSessionId, top)
           setAutoStick(false)
@@ -517,9 +586,42 @@ export function ChatView() {
     )
   }, [lastUserMessage])
 
+  // 会话切换：滞后锁与滚动快照一并重置（ChatView 跨 acp→acp 切换**不重挂载**，
+  // Layout 只按 runtime_kind 做 key，故按 sid 判而非指望重挂载）。
+  //
+  // 为什么用 effect 而不是「在 handleScroll 里比对 sid」：切换会话本身不产生
+  // scroll 事件，若只在滚动时比对，旧会话残留的锁会一直挂着——直到新会话恰好
+  // 滚一次才被清掉。effect 让「切会话即刻解锁」，不依赖后续是否有滚动。
+  //
+  // 重置后新会话首次触顶即可加载（锁不跨会话继承）。
+  useLayoutEffect(() => {
+    const lockState = topLoadStateRef.current
+    if (lockState.sid === activeSessionId) return
+    lockState.sid = activeSessionId
+    lockState.locked = false
+    lockState.movedUp = false
+    const el = scrollRef.current
+    if (el) {
+      lastScrollTopRef.current = el.scrollTop
+      lastScrollHeightRef.current = el.scrollHeight
+    }
+  }, [activeSessionId])
+
   const handleScroll = () => {
     const el = scrollRef.current
     if (!el) return
+    // 滞后锁记账：判「用户是否向上滚过」。程序性位移（前插补偿、钉底、跳转、
+    // 恢复位置）全部经 writeScrollTop 写入，基准随之同步，故不会计入——这是
+    // 「锁不会被补偿位移伪造解锁」的关键。
+    const lockState = topLoadStateRef.current
+    // 内容变矮 → 浏览器把 scrollTop 夹紧（向上位移）：那不是用户滚动，不计。
+    const shrank = el.scrollHeight < lastScrollHeightRef.current
+    if (!shrank && el.scrollTop < lastScrollTopRef.current) lockState.movedUp = true
+    lastScrollTopRef.current = el.scrollTop
+    lastScrollHeightRef.current = el.scrollHeight
+    // 解锁：用户确实向上滚过。补偿把 scrollTop 抬高（是向下），故补偿引发的
+    // scroll 事件贡献 0，不会误解锁——这正是 D6 要防的连锁翻页。
+    if (lockState.locked && lockState.movedUp) lockState.locked = false
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < CHAT_STICK_THRESHOLD_PX
     if (atBottom) {
       // 贴底（含用户滚回底部）：把锚点同步到实际位置——内容变矮时浏览器会夹紧
@@ -557,10 +659,15 @@ export function ChatView() {
       }, CHAT_DIM_IDLE_MS)
       setOverlaysDimmed(true)
     }
-    // 触顶加载更早历史。要求容器真的可滚动：内容不足一屏时 scrollTop 恒为 0，
-    // 否则会在 autoStick 仍为 true 的状态下自动拉取并被贴底逻辑拽回底部。
-    const scrollable = el.scrollHeight > el.clientHeight + TOP_LOAD_THRESHOLD_PX
-    if (scrollable && el.scrollTop < TOP_LOAD_THRESHOLD_PX) void loadOlderHistory()
+    // 触顶加载更早历史。三个判定各司其职，**不能混用**：
+    //  · 溢出——内容确实比视口高才可滚；否则 scrollTop 恒为 0，会在 autoStick
+    //    仍为 true 的状态下自动拉取并被贴底逻辑拽回底部。
+    //  · 近顶——预取窗口按视口比例（1.5 屏），比固定像素贴合不同视口与字号。
+    //  · 滞后锁——前插补偿会把 scrollTop 抬高，若此时仍满足近顶条件就会连锁
+    //    翻页直到历史耗尽（loadingHistory 只挡得住「请求在飞」，挡不住「已落定」）。
+    const scrollable = el.scrollHeight > el.clientHeight + TOP_LOAD_OVERFLOW_SLACK_PX
+    const nearTop = el.scrollTop < el.clientHeight * TOP_LOAD_NEAR_TOP_VIEWPORTS
+    if (scrollable && nearTop && !lockState.locked) void loadOlderHistory()
   }
 
   // 用户滑动手势的记录点（wheel / 触摸拖动）：必须与 scroll 事件解耦——scroll
@@ -657,10 +764,13 @@ export function ChatView() {
     )
     if (!bubble) return
     const cardH = lastPromptCardRef.current?.offsetHeight ?? 0
-    el.scrollTop +=
-      bubble.getBoundingClientRect().top -
-      el.getBoundingClientRect().top -
-      (CHAT_PROMPT_CARD_TOP_PX + cardH + CHAT_JUMP_TOP_GAP_PX)
+    writeScrollTop(
+      el,
+      el.scrollTop +
+        bubble.getBoundingClientRect().top -
+        el.getBoundingClientRect().top -
+        (CHAT_PROMPT_CARD_TOP_PX + cardH + CHAT_JUMP_TOP_GAP_PX),
+    )
     flashMessage(lastUserMessage.id)
   }
 
@@ -674,10 +784,13 @@ export function ChatView() {
       if (!bubble) return
       const bubbleRect = bubble.getBoundingClientRect()
       const elRect = el.getBoundingClientRect()
-      el.scrollTop += bubbleRect.top - elRect.top - (el.clientHeight - bubbleRect.height) / 2
+      writeScrollTop(
+        el,
+        el.scrollTop + bubbleRect.top - elRect.top - (el.clientHeight - bubbleRect.height) / 2,
+      )
       flashMessage(messageId)
     },
-    [flashMessage],
+    [flashMessage, writeScrollTop],
   )
 
   // 搜索结果跳转（计划 D7/D8）：命中已在窗口内 → 直接滚 + 闪；**不在**（命中消息

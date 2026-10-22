@@ -235,6 +235,45 @@ claudecodeui 的解锁判据是绝对位置 `scrollTop > 20`——在本项目�
 | 窗口放大到 1.5 视口 → 请求量上升 | 滞后锁 + 既有 `loadingHistory` 双层防抖 |
 | 与既有 `autoStick` / 贴底逻辑的交互 | 3c 回归必须覆盖「流式输出期间触顶」场景 |
 
+#### 实施记录（2026-10-22，Phase 3 已落地）
+
+改动落在 `frontend/src/components/Chat/ChatView.tsx` + 新增
+`frontend/src/components/Chat/ChatView.topload.test.tsx`（4 条用例）。
+
+- **3a**：`TOP_LOAD_THRESHOLD_PX`（200，两义合一）拆为两个独立量——
+  `TOP_LOAD_NEAR_TOP_VIEWPORTS = 1.5`（触发窗口，视口比例）与
+  `TOP_LOAD_OVERFLOW_SLACK_PX = 32`（溢出余量，小绝对值）。
+- **3b**：`topLoadStateRef = { sid, locked, movedUp }` + `lastScrollTopRef` /
+  `lastScrollHeightRef` 两个基准快照；所有程序性 `scrollTop` 写入收口到
+  `writeScrollTop`（钉底 / 前插补偿 / 位置恢复 / 跳转到消息 / 跳到上次输入），
+  写入后同步基准 → 程序性位移不可能被读成「用户向上滚」。
+- **3c**：`ChatView.topload.test.tsx` 4 条用例全绿；既有 `ChatView.*.test.tsx`
+  与前端全量 1461 条测试全绿，`pnpm lint` 0 error、`tsc -b` 通过。
+
+**勘误（2026-10-22，解锁判据偏离 D6 原文）**：D6 原文写「解锁 = **用户手势**
+（wheel/touchmove）发生后且 `scrollTop` 减小」。实施改为**纯方向判据**——
+「用户确实向上滚过」即解锁，**不要求手势**。理由：拖原生滚动条、键盘翻页
+（PageUp / 方向键）都不产生 wheel/touchmove 事件，加手势门槛会把这类用户
+**永久锁死在第一页**（无法再上拉加载更早历史）——那是功能回退，比「多几次
+请求」严重得多。方向判据同样无法被程序性位移伪造：程序性位移只会把
+`scrollTop` 抬高或等量改写，绝不产生「相对上次快照变小」，且所有程序性写入
+都经 `writeScrollTop` 同步基准。风险表里「锁『锁死』」一条的缓解措施（要求手势）
+随本勘误作废——实际缓解来自「基准同步 + 方向判据」。
+
+**勘误（2026-10-22，会话切换重置的时机）**：3b 原文写「会话切换时重置」。
+实施用 `useLayoutEffect` 监听 `activeSessionId` 变更重置锁与快照，而**不是**
+在 `handleScroll` 里比对 sid：切换会话本身不产生 scroll 事件，若只在滚动时
+比对，旧会话残留的锁会一直挂着——直到新会话恰好滚一次才被清掉（表现为
+「切到新会话后第一次触顶不加载」）。`ChatView` 跨 acp→acp 切换**不重挂载**
+（Layout 只按 `runtime_kind` 做 key），故重置必须按 sid 判而非指望重挂载。
+
+**勘误（2026-10-22，jsdom 下的 scrollHeight 度量）**：测试要求里说「沿用
+`mockScrollMetrics`」，但它给的是**静态** `scrollHeight`——补偿 effect 靠
+`scrollHeight` 差值算 delta，静态值会让 delta 恒为 0，测不到「补偿抬高
+`scrollTop`」这条关键路径。故测试内另行覆写 `scrollHeight` getter：按
+「当前会话消息条数 × 每条高度」动态给出（并给 `mockScrollMetrics` 一个足够
+大的内部 `scroll`，否则其 `scrollTop` setter 的夹紧会把补偿写入值削掉）。
+
 ### Phase 4（P4）— 会话数上限 + 按 created_at 淘汰
 
 > **2026-10-22 排期补充**：D5 原定「不删 `sessions` 行，只清 blocks 或标记归档」的语义，

@@ -53,6 +53,10 @@ Prefix each entry with the area it affects:
 
 - (2026-10-22 02:14) `[frontend]` `[backend]` `[api]` 服务重启改为**条件确认**：点击「立即重启」前先查 `GET /system/restart-preflight`，存在活跃 pty / ACP 会话进程时在升级面板内展开中断提醒（显示各自数量，并写明 tmux 进程不受影响），用户确认后才重启；无活跃会话保持一键直接重启，预检失败按「数量未知」要求确认而不是静默跳过（`src/api/system.rs`、`src/engine/pty/mod.rs`、`src/engine/mod.rs`、`frontend/src/components/Sidebar/UpdateBadge.tsx`、`frontend/src/api/client.ts`）
 
+### Fixed
+
+- (2026-10-22 12:15) `[frontend]` 聊天区上拉加载更早历史不再连锁翻页：前插补偿抬高滚动位置后会立即再触发一次加载、连续翻页直到历史耗尽；改为带滞后锁（用户确实向上滚过才解锁），且触发窗口按视口比例（1.5 屏）计算、短会话仍可上拉加载（`frontend/src/components/Chat/ChatView.tsx`）
+
 ## [0.3.5] - 2026-10-22
 
 ### Added
