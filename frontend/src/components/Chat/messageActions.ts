@@ -1,7 +1,7 @@
 import type { ReactElement, SVGProps } from 'react'
 import type { ChatMessage } from '../../stores/chatStore'
 import { extractMessageText } from '../../utils/messageText'
-import { messageToMarkdown } from '../../utils/messageMarkdown'
+import { messageToMarkdown, type MessageMarkdownMarkers } from '../../utils/messageMarkdown'
 import { IconCopy, IconDownload, IconLink, IconRefresh } from '../FileManager/icons'
 
 /**
@@ -31,6 +31,14 @@ export interface MessageActionContext {
   handlers: MessageActionHandlers
   /** agent 显示名（D5 复制为 Markdown 的 header 用）。 */
   agentName?: string
+  /**
+   * 导出件的标记文案（截断提示 / 工具调用小节标题），随界面语言。
+   *
+   * 由渲染方（ChatMessageView，持 `t`）注入：动作注册表是模块级常量，拿不到
+   * react-i18next 的 `t`。缺省时序列化器用内置中文默认（见
+   * `utils/messageMarkdown.ts::DEFAULT_MARKERS`）。
+   */
+  markers?: MessageMarkdownMarkers
 }
 
 export interface MessageAction {
@@ -82,8 +90,8 @@ export const messageActions: MessageAction[] = [
       !message.streaming &&
       (extractMessageText(message) !== '' ||
         message.blocks.some((b) => b.type === 'tool_call')),
-    run: ({ message, handlers, agentName }) => {
-      const md = messageToMarkdown(message, { agentName })
+    run: ({ message, handlers, agentName, markers }) => {
+      const md = messageToMarkdown(message, { agentName, markers })
       if (md) handlers.copyMessage(md)
     },
   },

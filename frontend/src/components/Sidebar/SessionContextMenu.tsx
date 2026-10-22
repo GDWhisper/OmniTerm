@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import type { Session } from '../../api/client'
 import { ContextMenu, type ContextMenuPoint } from '../Common/ContextMenu'
-import { IconListChecks, IconPencil } from '../FileManager/icons'
+import { IconDownload, IconListChecks, IconPencil } from '../FileManager/icons'
 
 export interface SessionContextMenuState extends ContextMenuPoint {
   session: Session
@@ -18,11 +18,17 @@ export function SessionContextMenu(props: {
   onClose: () => void
   onBatchMode: (session: Session) => void
   onRename: (session: Session) => void
+  /** 导出该会话为 Markdown 文件（仅 ACP 会话有聊天历史可导）。 */
+  onExport: (session: Session) => void
 }) {
   const { t } = useTranslation()
   const { menu, onClose } = props
 
   if (!menu) return null
+
+  // 导出只对 ACP 会话开放：终端（tmux/pty）会话没有 chat_messages，
+  // 导出必然是空文件——与其给一个点不出结果的菜单项，不如不显示。
+  const exportable = menu.session.runtime_kind === 'acp'
 
   return (
     <ContextMenu
@@ -41,6 +47,16 @@ export function SessionContextMenu(props: {
           label: t('sidebar.rename'),
           run: () => props.onRename(menu.session),
         },
+        ...(exportable
+          ? [
+              {
+                id: 'export',
+                icon: <IconDownload width={14} height={14} />,
+                label: t('chat.export.label'),
+                run: () => props.onExport(menu.session),
+              },
+            ]
+          : []),
       ]}
     />
   )

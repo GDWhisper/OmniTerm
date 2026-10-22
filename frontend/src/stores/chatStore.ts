@@ -433,6 +433,22 @@ interface ChatActions {
     messages: ChatMessage[],
     historyCursor: string | null,
   ) => void
+  /**
+   * 消息窗口**整体替换**（F06 定位页，plan D8）：把窗口换成定位页的内容，并把
+   * 历史游标重置为该页最旧行——替换后「继续上翻加载更早」从该页最旧行接上，
+   * 语义正确。
+   *
+   * 为什么是替换而不是前插：前插会让目标消息与已加载的新消息之间出现空洞
+   * （中间那几页没加载），滚动位置计算随之失真。
+   *
+   * 不动 todo 板：它是会话级产物（由完整消息推导），窗口替换只是换了可见范围，
+   * 不是会话内容变了——与 `prependMessages` 的口径一致。
+   */
+  replaceMessages: (
+    sessionId: string,
+    messages: ChatMessage[],
+    historyCursor: string | null,
+  ) => void
   /** 置会话 hydrate 落定标志：ChatView 的 GET /messages 落定后调用，放行 useAcpChat 缓冲。 */
   setHydrated: (sessionId: string, hydrated: boolean) => void
   /** 断连标记：本页面生命周期内该会话 WS 断过（广播无补发，store 可能陈旧）。
@@ -451,6 +467,10 @@ interface ChatActions {
   requestInsert: (sessionId: string, text: string) => void
   /** 消费 pendingInsert（ChatInput 用掉后立即清空，避免切会话后旧引用复活）。 */
   consumeInsert: () => void
+  /** 文件拖拽到输入框：写入待插入的 @ 引用绝对路径（空数组 no-op）。 */
+  requestMention: (sessionId: string, paths: string[]) => void
+  /** 原子消费 pendingMention：匹配 sessionId 时取出并清空，否则返回 null。 */
+  consumeMention: (sessionId: string) => string[] | null
   markEnded: (sessionId: string) => void
   clearEnded: (sessionId: string) => void
   /** 审批入队（upsert）：id 已存在则原位替换（重放/重发不产生重复项），否则追加。 */
@@ -676,6 +696,11 @@ interface ChatStoreState {
    * 是「注入输入框」的显式信号，不是会话状态的一部分。
    */
   pendingInsert: { sessionId: string; text: string } | null
+  /**
+   * 文件拖拽到输入框：待插入的 @ 引用绝对路径。与 pendingInsert 同为顶层一次性
+   * 信号；ChatInput 通过 `consumeMention` 原子消费，防 StrictMode effect 双跑重复插入。
+   */
+  pendingMention: { sessionId: string; paths: string[] } | null
 }
 
 type ChatStore = ChatStoreState & ChatActions
@@ -1036,9 +1061,10 @@ const applyTopLevelActions = (
   return next
 }
 
-export const useChatStore = create<ChatStore>((set) => ({
+export const useChatStore = create<ChatStore>((set, getStore) => ({
   states: {},
   pendingInsert: null,
+  pendingMention: null,
 
   appendChunk: (sessionId, chunk) =>
     set((state) => {
@@ -1354,9 +1380,17 @@ export const useChatStore = create<ChatStore>((set) => ({
       })
     }),
 
+  replaceMessages: (sessionId, messages, historyCursor) =>
+    set((state) =>
+      patch(state, sessionId, {
+        messages: dropInlinedSystemMessages(messages),
+        historyCursor,
+        loadingHistory: false,
+      }),
+    ),
+
   setHydrated: (sessionId, hydrated) =>
     set((state) => patch(state, sessionId, { hydrated })),
-
   setNeedsCatchUp: (sessionId, needs) =>
     set((state) => patch(state, sessionId, { needsCatchUp: needs })),
 
@@ -1427,12 +1461,21 @@ export const useChatStore = create<ChatStore>((set) => ({
       const current = get(state, sessionId)
       const messages = [...current.messages]
       const idx = messages.findIndex((m) => m.id === rowId)
+      // 快照是**整轮**的权威内容：同一轮在 live store 里可能已被独立 SYSTEM 消息
+      // 切成多条 streaming assistant（例如 vendor 状态帧兜底成 SYSTEM 行）。
+      // 只收编尾部 assistant 会漏掉早先的分身，它们最后一段 text 之后的尾随过程块
+      // 永远露在折叠容器外（2026-10-20 用户报告）。这里把本轮所有 streaming
+      // assistant 收编成一条快照消息并放到末尾，后续 live 帧才能继续挂到它上面。
+      const streamingIdxs: number[] = []
+      for (let i = 0; i < messages.length; i++) {
+        const m = messages[i]
+        if (m.role === 'assistant' && m.streaming && i !== idx) streamingIdxs.push(i)
+      }
       const prevCreatedAt =
         idx >= 0
           ? messages[idx].createdAt
-          : messages[messages.length - 1]?.role === 'assistant' &&
-              messages[messages.length - 1]?.streaming
-            ? messages[messages.length - 1].createdAt
+          : streamingIdxs.length > 0
+            ? messages[streamingIdxs[streamingIdxs.length - 1]].createdAt
             : Date.now()
       const msg: ChatMessage = {
         id: rowId,
@@ -1443,18 +1486,9 @@ export const useChatStore = create<ChatStore>((set) => ({
         createdAt: prevCreatedAt,
         streaming: true,
       }
-      if (idx >= 0) {
-        messages[idx] = msg
-      } else {
-        const lastIdx = messages.length - 1
-        const last = messages[lastIdx]
-        if (last && last.role === 'assistant' && last.streaming) {
-          // 收编末尾 live streaming 消息，统一 id=rowId 供后续快照匹配。
-          messages[lastIdx] = msg
-        } else {
-          messages.push(msg)
-        }
-      }
+      const streamingSet = new Set(streamingIdxs)
+      const kept = messages.filter((_, i) => i !== idx && !streamingSet.has(i))
+      kept.push(msg)
       // 看板同步：快照 blocks 可能含最新 todo，扫描并更新（与 hydrate 一致）。
       let todos = current.todos
       let todosTitle = current.todosTitle
@@ -1469,7 +1503,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       // 快照的 blocks 已包含 mid-turn SYSTEM 告知；live 的独立 system 消息按
       // noticeId 收口，避免同一告知在快照收编后出现两次。
       return patch(state, sessionId, {
-        messages: dropInlinedSystemMessages(messages),
+        messages: dropInlinedSystemMessages(kept),
         todos,
         todosTitle,
       })
@@ -1577,6 +1611,18 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   consumeInsert: () =>
     set({ pendingInsert: null }),
+
+  requestMention: (sessionId, paths) => {
+    if (paths.length === 0) return
+    set({ pendingMention: { sessionId, paths: [...paths] } })
+  },
+
+  consumeMention: (sessionId) => {
+    const pending = getStore().pendingMention
+    if (!pending || pending.sessionId !== sessionId) return null
+    set({ pendingMention: null })
+    return pending.paths
+  },
 }))
 
 export const selectChatState = (sessionId: string | null) => (s: ChatStore) =>

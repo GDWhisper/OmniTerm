@@ -53,7 +53,15 @@ export function dataUrlToAttachment(dataUrl: string, id: string): ImageAttachmen
 }
 
 /**
- * 图片 `<img src>`：优先缩略图，没有再退回原图。
+ * 大图预览 `<img src>`：始终用 `data`。live 消息的 `data` 是原图（`thumb`
+ * 只是索引缩略图）；hydrate 的历史行按 D3 只落缩略图，此时 `data` 即缩略图。
+ */
+export function imageFullSrc(image: { mimeType: string; data: string }): string {
+  return `data:${image.mimeType};base64,${image.data}`
+}
+
+/**
+ * 气泡缩略图 `<img src>`：优先缩略图，没有再退回原图。
  * 渲染侧一律走这里，避免在几十 px 的显示尺寸上解码整张原图。
  */
 export function imageSrc(image: {
@@ -61,10 +69,8 @@ export function imageSrc(image: {
   data: string
   thumb?: ImageThumb
 }): string {
-  const src = image.thumb ?? image
-  return `data:${src.mimeType};base64,${src.data}`
+  return imageFullSrc(image.thumb ?? image)
 }
-
 
 function drawToJpeg(source: ImageBitmap, maxDimension: number, quality: number): string | null {
   const scale = Math.min(1, maxDimension / Math.max(source.width, source.height))

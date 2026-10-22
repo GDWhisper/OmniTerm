@@ -47,6 +47,29 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [0.3.5] - 2026-10-22
+
+### Added
+
+- (2026-10-20 20:41) `[frontend]` FileManager 文件图标可拖拽到 ACP 输入框生成 `@工作区相对路径` 引用：复用 Pointer 拖拽（非 HTML5 DnD），支持多选文件；目录/工作区外/含空白或 `@` 的路径跳过并提示，按后端 8 条上限截断；拖拽期间输入框显示投放高亮（`frontend/src/components/FileManager/useFileDrag.ts`、`frontend/src/components/Chat/ChatInput.tsx`、`frontend/src/stores/chatStore.ts`）
+
+- (2026-10-21 03:07) `[frontend]` ACP 会话可导出为 Markdown 文件：侧栏会话右键/长按菜单新增「导出为 Markdown」项（仅 ACP 会话显示——终端会话没有聊天历史），点击后独立分页拉取该会话的**全部**历史（不复用界面上已加载的页——那只有首屏与用户上拉过的页，复用会产出「看起来完整、其实缺了前半段」的导出件），正文复用单条「复制为 Markdown」的序列化规则逐条拼装；导出件头部写明导出时刻、图片只有缩略图（原图不落库）、thinking 不导出与工具输出截断口径；条数与体积双上限触顶时保留最新的一段并显式标注省略量，图片按剩余预算内联 data URI 或降级为可见占位符；导出件文案跟随界面语言（会话级导出与消息级「复制为 Markdown」共用同一套本地化文案）（`frontend/src/utils/sessionMarkdown.ts`、`frontend/src/utils/sessionExport.ts`、`frontend/src/utils/markdownI18n.ts`、`frontend/src/hooks/useSessionExport.ts`、`frontend/src/components/Sidebar/SessionContextMenu.tsx`）
+
+- (2026-10-21 09:30) `[frontend]` agent 回合结束 / 出错 / 需要审批时可弹**浏览器桌面通知**（OS 级 `Notification` API），设置入口在 设置 → 通知：通知**只含会话名与事件类型，不含 agent 回复正文**（OS 通知在锁屏明文显示，正文可能含代码/路径/凭据）；触发判据为「用户是否在眼前」（非当前会话，或当前会话但标签页已隐藏——用户切去了别的应用；只按「非当前会话」判会误杀主场景，因为 ACP 的 WebSocket 按会话建立、回合事件只在用户正看着该会话时到达）；桌面通知已启用且已授权时不再叠加 OmniTerm 自己的提示音（避免双响），站内提醒（侧栏红点 + 提示音 + 标签页标题闪烁）不受影响；多标签页同时打开同一会话时只弹一条（BroadcastChannel 先声明者发）；能力与权限态在设置里如实展示——主部署形态以明文 http 访问局域网 IP 时浏览器不提供该能力，开关置灰并写明原因，权限被拒则给出「重新请求」入口，杜绝「用户以为开了、其实没生效」；开关存 localStorage（通知权限是浏览器级状态，跨设备无法共享）（`frontend/src/utils/desktopNotification.ts`、`frontend/src/components/Attention/AttentionProvider.tsx`、`frontend/src/components/Settings/DesktopNotificationSection.tsx`）
+
+- (2026-10-21 10:40) `[backend]` `[frontend]` ACP 会话新增**会话内全文搜索**（聊天面板内 `Ctrl/Cmd+F` 唤起）：搜的是**整个会话的消息库**（不是界面上已加载的那几页），命中未加载的消息时自动拉「定位页」把消息窗口整体替换到目标附近并滚动 + 气泡闪烁；关键词空格分隔为 AND 语义，中文子串直接命中（后端用 LIKE 而非 FTS5——实测会话量级下 LIKE 扫描已够快，FTS5 会让库涨约 6.7 倍），`%` `_` 等通配符按字面量匹配；检索有双扫描预算（行数 + 文本字节两个维度，任一触顶即停），**触顶时结果面板明确写明「仅搜索了最近 N 行」而不是静默截断**——静默截断会让用户以为搜全了，比搜不到更糟；定位页替换窗口后「更新的消息」不在窗口内，标题栏因此提供「回到最新消息」出口；检索只覆盖对话正文（不搜工具输出与思考块），系统内部事件不参与（`src/acp/chat_persistence.rs`、`src/api/sessions.rs`、`frontend/src/components/Chat/ChatSearchBar.tsx`、`frontend/src/components/Chat/ChatView.tsx`）
+
+### Fixed
+
+- (2026-10-22 00:49) `[frontend]` 终端在 TUI 开启鼠标上报时拦截浏览器原生右键菜单：此前右键会同时作为 button 2 上报给 PTY 并弹出浏览器菜单，菜单抢走 TUI 的右键交互；现仅在 xterm 解析到鼠标上报激活时 `preventDefault`，Shift+右键保留为原生菜单/文本选择逃生口，普通 shell 不拦截（复制/粘贴菜单照常）（`frontend/src/hooks/useTerminal.ts`）
+- (2026-10-20 21:20) `[frontend]` 修复 ACP 一段运行过程未随工作块折叠：ACP 线格式的 `current_mode_update` 字段是 `currentModeId`，前端只认 `mode`，导致模式通知退化成独立 SYSTEM 消息、打断 assistant 尾部并把同一 turn 拆成多条消息；前一条消息最后一段 text 之后的思考/工具/权限块因此永远露在折叠容器外。现兼容 `currentModeId` / `current_mode_id` / `mode`，形状不认识时丢弃而非造 SYSTEM 消息；`turn_snapshot` 同时收编本轮所有 streaming 分身并落到末尾，避免旧分身成为孤儿段（`frontend/src/hooks/useAcpChat.ts`、`frontend/src/stores/chatStore.ts`）
+- (2026-10-20 20:59) `[frontend]` ACP 输入框未发送的图片 / 文件附件在切换会话后不再丢失：附件草稿按会话存入有界内存缓存（8 会话 / 32 MiB LRU），切回即恢复、发送即清、刷新即清；文字草稿仍走 sessionStorage（`frontend/src/utils/chatAttachmentDraft.ts`、`frontend/src/components/Chat/ChatInput.tsx`）
+- (2026-10-20 20:59) `[frontend]` 已发送图片可点击气泡缩略图打开大图预览（Modal，Esc / 遮罩关闭）：live 消息显示原图，历史消息按落库策略显示缩略图（`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/utils/imageAttachment.ts`）
+
+### Changed
+
+- (2026-10-22 01:12) `[infra]` 升级 `rustls-webpki` 0.103.16 / `webpki-roots` 1.0.10，修复 RUSTSEC-2026-0381/0382（已泄露私钥的 emSign 中间证书签发链可能被错误接受），影响出站 HTTPS 校验（更新探测等）
+
 ## [0.3.4] - 2026-10-20
 
 ### Added

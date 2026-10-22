@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findAtToken, replaceAtToken } from './atReference'
+import { findAtToken, insertAtReferences, isAtReferenceSafePath, replaceAtToken } from './atReference'
 
 describe('findAtToken', () => {
   it('detects @ at start of text', () => {
@@ -36,6 +36,71 @@ describe('findAtToken', () => {
 
   it('only considers text before cursor', () => {
     expect(findAtToken('@abc', 2)).toEqual({ start: 0, query: 'a' })
+  })
+})
+
+describe('insertAtReferences', () => {
+  it('inserts at the start without a leading space', () => {
+    expect(insertAtReferences('', 0, 0, ['src/main.rs'])).toEqual({
+      text: '@src/main.rs ',
+      cursor: 13,
+    })
+  })
+
+  it('adds a leading space when the caret follows a non-whitespace character', () => {
+    expect(insertAtReferences('hello world', 5, 5, ['src/a.ts'])).toEqual({
+      text: 'hello @src/a.ts  world',
+      cursor: 16,
+    })
+  })
+
+  it('does not add a leading space after existing whitespace', () => {
+    expect(insertAtReferences('see ', 4, 4, ['a.ts'])).toEqual({
+      text: 'see @a.ts ',
+      cursor: 10,
+    })
+  })
+
+  it('replaces the selected range and preserves trailing text', () => {
+    expect(insertAtReferences('hello world', 0, 5, ['a.ts'])).toEqual({
+      text: '@a.ts  world',
+      cursor: 6,
+    })
+  })
+
+  it('inserts multiple paths separated by spaces', () => {
+    expect(insertAtReferences('', 0, 0, ['a.ts', 'b.ts'])).toEqual({
+      text: '@a.ts @b.ts ',
+      cursor: 12,
+    })
+  })
+
+  it('replaces an active @ token', () => {
+    const text = 'look @src'
+    const token = findAtToken(text, text.length)!
+    expect(insertAtReferences(text, token.start, text.length, ['src/main.rs'])).toEqual({
+      text: 'look @src/main.rs ',
+      cursor: 18,
+    })
+  })
+
+  it('returns the text unchanged for an empty path list', () => {
+    expect(insertAtReferences('abc', 1, 2, [])).toEqual({ text: 'abc', cursor: 1 })
+  })
+})
+
+describe('isAtReferenceSafePath', () => {
+  it('accepts workspace-relative paths', () => {
+    expect(isAtReferenceSafePath('src/main.rs')).toBe(true)
+    expect(isAtReferenceSafePath('./docs/plan.md')).toBe(true)
+  })
+
+  it('rejects empty, whitespace, and @ paths', () => {
+    expect(isAtReferenceSafePath('')).toBe(false)
+    expect(isAtReferenceSafePath('a b.ts')).toBe(false)
+    expect(isAtReferenceSafePath('a\tb.ts')).toBe(false)
+    expect(isAtReferenceSafePath('a\nb.ts')).toBe(false)
+    expect(isAtReferenceSafePath('a@b.ts')).toBe(false)
   })
 })
 

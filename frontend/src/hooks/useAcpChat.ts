@@ -9,6 +9,7 @@ import { postSyncPayload } from '../utils/syncMessages'
 import { LiveBuffer, LIVE_BUFFER_FLUSH_FALLBACK_MS } from '../utils/liveBuffer'
 import { permDecisionNoticeExempt } from '../utils/permTimeout'
 import { clearChatScrollMemory } from '../utils/chatScrollMemory'
+import { isFrameWrapperParsed } from '../utils/storedMessages'
 
 export type AcpConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -516,9 +517,23 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
 
   // CurrentModeUpdate
   if (variant === 'CurrentModeUpdate' || variant === 'current_mode_update') {
-    const inner = getVariantInner(obj, variant)
-    const mode = inner ? inner['mode'] : undefined
-    if (typeof mode === 'string') return { kind: 'setMode', mode }
+    // ACP v1 的线格式字段是 `currentModeId`（SessionUpdate::CurrentModeUpdate，
+    // camelCase）；早期实现/旧测试用 `mode`。只认 `mode` 会让状态通知落到末尾的
+    // `pushSystem` 兜底——live 列表多出一条 SYSTEM 消息、assistant 尾部被打断，
+    // 同一 turn 被拆成多条消息后，前一条的尾随过程块永远露在折叠容器外
+    // （2026-10-20 用户报告的「一段运行过程未折叠」即由此触发）。
+    const inner = getVariantInner(obj, variant) ?? obj
+    const mode =
+      typeof inner['mode'] === 'string'
+        ? inner['mode']
+        : typeof inner['currentModeId'] === 'string'
+          ? inner['currentModeId']
+          : typeof inner['current_mode_id'] === 'string'
+            ? inner['current_mode_id']
+            : undefined
+    if (mode) return { kind: 'setMode', mode }
+    // 形状不认识 = 状态类通知，不是内容：丢弃，绝不渲染成 SYSTEM 消息。
+    return { kind: 'drop' }
   }
 
   // ToolCall / ToolCallUpdate — both upsert by toolCallId. ToolCallUpdate is a
@@ -664,24 +679,9 @@ function rawFramesToBlocks(wrapperJson: string, fullText?: string): ContentBlock
   return prependEvictedProse(blocks, actions, fullText)
 }
 
-/** 判定已 parse 的值是否为后端累积器的原始帧包裹形态（`{"v":1,"frames":[...]}`）。 */
-function isFrameWrapperParsed(parsed: unknown): boolean {
-  return !!parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>)['frames'])
-}
-
-/** 判定 blocks 字符串是否为后端累积器的原始帧包裹（`{"v":1,"frames":[...]}`）。
- *  `decodeStoredBlocks` 会把包裹解码成 cooked blocks，解码后无法反推来源——hydrate
- *  转换（ChatView `toChatMessages`）用此判定标记 RAW 残留行，方案 B 据此做带 id 的
- *  cooked 回写（见 2026-08-18 计划 P0）。 */
-export function isRawFrameWrapper(raw: string): boolean {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return false
-  }
-  return isFrameWrapperParsed(parsed)
-}
+/** 判定已 parse 的值是否为后端累积器的原始帧包裹形态（`{"v":1,"frames":[...]}`）。
+ *  判定本身是纯 JSON 形状检查，与解码无关，故住在 `utils/storedMessages.ts`
+ *  （hydrate 转换与导出转换都要用它，且 `utils/` 不反向依赖 `hooks/`）。 */
 
 /** hydrate 入口：cooked 数组原样返回；原始帧包裹解码；未知形状返回 null（调用方回退纯文本）。
  *  `fullText` 为后端全量 text 列：RAW 包裹解码时用于补被驱逐的正文前缀（见 prependEvictedProse）。 */

@@ -25,6 +25,7 @@ function baseProps(overrides: Partial<Parameters<typeof SessionContextMenu>[0]> 
     onClose: vi.fn(),
     onBatchMode: vi.fn(),
     onRename: vi.fn(),
+    onExport: vi.fn(),
     ...overrides,
   }
 }
@@ -122,8 +123,32 @@ describe('SessionContextMenu', () => {
     const left = parseInt(menuEl.style.left, 10)
     const top = parseInt(menuEl.style.top, 10)
     expect(left).toBeLessThanOrEqual(window.innerWidth - 160)
-    expect(top).toBeLessThanOrEqual(window.innerHeight - 88)
+    // 菜单高 = 3 项 × 40 + 8 内边距（ACP 会话多一项「导出为 Markdown」）。
+    expect(top).toBeLessThanOrEqual(window.innerHeight - 128)
     expect(left).toBeGreaterThanOrEqual(0)
     expect(top).toBeGreaterThanOrEqual(0)
+  })
+
+  it('ACP 会话显示「导出为 Markdown」，点击触发回调', () => {
+    const onExport = vi.fn()
+    const onClose = vi.fn()
+    renderMenu(baseProps({ onExport, onClose }))
+
+    act(() => {
+      menuButton('chat.export.label').click()
+    })
+    expect(onExport).toHaveBeenCalledWith(session)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('终端会话没有聊天历史 → 不显示导出项', () => {
+    renderMenu(
+      baseProps({
+        menu: { session: { ...session, runtime_kind: 'tmux' }, x: 10, y: 10 },
+      }),
+    )
+    const labels = [...document.body.querySelectorAll('.context-menu-item')].map((b) => b.textContent)
+    expect(labels).not.toContain('chat.export.label')
+    expect(labels).toEqual(['sidebar.batchMode', 'sidebar.rename'])
   })
 })

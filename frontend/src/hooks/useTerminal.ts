@@ -249,6 +249,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   const observerRef = useRef<ResizeObserver | null>(null)
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mouseUpHandlerRef = useRef<(() => void) | null>(null)
+  const contextMenuHandlerRef = useRef<(() => void) | null>(null)
   const touchScrollCleanupRef = useRef<(() => void) | null>(null)
   const keyHandlerAttachedRef = useRef(false)
   // 鼠标上报 encoding 的「最后写入值」记账（2026-09-23）：xterm 6.0 IModes
@@ -769,6 +770,10 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       mouseUpHandlerRef.current()
       mouseUpHandlerRef.current = null
     }
+    if (contextMenuHandlerRef.current) {
+      contextMenuHandlerRef.current()
+      contextMenuHandlerRef.current = null
+    }
     if (touchScrollCleanupRef.current) {
       touchScrollCleanupRef.current()
       touchScrollCleanupRef.current = null
@@ -994,6 +999,21 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     container.addEventListener('mouseup', handleMouseUp)
     mouseUpHandlerRef.current = () => {
       container.removeEventListener('mouseup', handleMouseUp)
+    }
+
+    // 鼠标上报激活时右键是 TUI 的协议事件（xterm 已把 button 2 上报给 PTY），
+    // 浏览器原生菜单会同时弹出并抢走交互。capture 阶段拦截并跳过 xterm 自己
+    // 的原生菜单预处理；Shift+右键在 xterm 里强制选择、不上报鼠标，故保留为
+    // 使用原生菜单的逃生口。mouse mode 读 xterm 解析态：pty 经 cell_frame
+    // 中继、tmux 由原始输出解析（两侧同源），普通 shell（none）不拦截。
+    const handleContextMenu = (ev: MouseEvent) => {
+      if (ev.shiftKey || term.modes.mouseTrackingMode === 'none') return
+      ev.preventDefault()
+      ev.stopPropagation()
+    }
+    container.addEventListener('contextmenu', handleContextMenu, true)
+    contextMenuHandlerRef.current = () => {
+      container.removeEventListener('contextmenu', handleContextMenu, true)
     }
 
     // Mobile touch scroll: vertical finger drags become wheel events so

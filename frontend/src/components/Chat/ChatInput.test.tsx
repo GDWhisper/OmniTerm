@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act } from 'react'
+import { StrictMode, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { ChatInput } from './ChatInput'
+import { useChatStore } from '../../stores/chatStore'
+import { useToastStore } from '../../stores/toastStore'
+import { saveDraft } from '../../utils/chatDraft'
+import { clearAllAttachmentDrafts } from '../../utils/chatAttachmentDraft'
 import '../../i18n'
 
 // jsdom 没有 createImageBitmap/canvas：图片管线直接 mock 掉，聚焦本组件的行为
@@ -38,6 +42,7 @@ interface RenderOverrides {
   sending?: boolean
   imageSupported?: boolean
   fileSupported?: boolean
+  workspacePath?: string
 }
 
 let container: HTMLDivElement
@@ -47,6 +52,10 @@ beforeEach(() => {
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
+  useChatStore.setState({ pendingInsert: null, pendingMention: null })
+  useToastStore.setState({ toasts: [] })
+  sessionStorage.clear()
+  clearAllAttachmentDrafts()
 })
 
 afterEach(() => {
@@ -54,7 +63,7 @@ afterEach(() => {
   container.remove()
 })
 
-function render(overrides: RenderOverrides = {}) {
+function render(overrides: RenderOverrides = {}, strict = false) {
   const props = {
     sessionId: 's1',
     disabled: false,
@@ -66,12 +75,42 @@ function render(overrides: RenderOverrides = {}) {
     queuedMessage: null as string | null,
     imageSupported: true,
     fileSupported: true,
+    workspacePath: '/repo',
     ...overrides,
   }
   act(() => {
-    root.render(<ChatInput {...props} />)
+    const element = <ChatInput {...props} />
+    root.render(strict ? <StrictMode>{element}</StrictMode> : element)
   })
   return props
+}
+
+function textarea(): HTMLTextAreaElement {
+  return container.querySelector('textarea')!
+}
+
+function typeText(value: string, caret = value.length) {
+  act(() => {
+    const el = textarea()
+    el.focus()
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      'value',
+    )!.set!
+    setter.call(el, value)
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+    el.setSelectionRange(caret, caret)
+    // React 的 onSelect 由 SelectEventPlugin 合成（selectionchange/mouseup 等），
+    // 单纯派发原生 select 事件不会触发。
+    document.dispatchEvent(new Event('selectionchange'))
+    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+  })
+}
+
+function requestMention(sessionId: string, paths: string[]) {
+  act(() => {
+    useChatStore.getState().requestMention(sessionId, paths)
+  })
 }
 
 function attachButton(): HTMLButtonElement | null {
@@ -92,6 +131,10 @@ function fileInput(): HTMLInputElement {
   return inputs[1]
 }
 
+function imageInput(): HTMLInputElement {
+  return container.querySelectorAll<HTMLInputElement>('input[type="file"]')[0]
+}
+
 function removeFileButton(): HTMLButtonElement | null {
   return container.querySelector<HTMLButtonElement>('button[title="Remove file"]')
 }
@@ -103,6 +146,19 @@ async function pickFile(name: string, type: string, body = 'hello') {
   await act(async () => {
     input.dispatchEvent(new Event('change', { bubbles: true }))
   })
+}
+
+async function pickImage(name = 'a.png', type = 'image/png') {
+  const input = imageInput()
+  const file = new File(['img'], name, { type })
+  Object.defineProperty(input, 'files', { value: [file], configurable: true })
+  await act(async () => {
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+
+function imageThumbs(): HTMLImageElement[] {
+  return Array.from(container.querySelectorAll<HTMLImageElement>('img'))
 }
 
 describe('ChatInput attach entry', () => {
@@ -177,13 +233,127 @@ describe('ChatInput file attachments', () => {
     expect(queue.disabled).toBe(true)
   })
 
-  it('clears attachments when the session changes', async () => {
+  it('keeps attachments per session and restores them when switching back', async () => {
     const props = render()
     await pickFile('a.pdf', 'application/pdf')
     expect(container.textContent).toContain('a.pdf')
+
     act(() => {
       root.render(<ChatInput {...props} sessionId="s2" />)
     })
+    // 新会话看不到旧会话的附件……
     expect(container.textContent).not.toContain('a.pdf')
+
+    // ……切回原会话时恢复（不再像以前那样清空）。
+    act(() => {
+      root.render(<ChatInput {...props} sessionId="s1" />)
+    })
+    expect(container.textContent).toContain('a.pdf')
+    expect(removeFileButton()).toBeTruthy()
+  })
+
+  it('restores image attachments across a remount of ChatInput', async () => {
+    const props = render()
+    await pickImage()
+    expect(imageThumbs()).toHaveLength(1)
+
+    // production 路径：ChatView 用 key=sessionId 重挂载组件。
+    act(() => {
+      root.render(<ChatInput key="s1-remounted" {...props} />)
+    })
+    expect(imageThumbs()).toHaveLength(1)
+    expect(imageThumbs()[0].getAttribute('src')).toBe('data:image/png;base64,AAAA')
+  })
+
+  it('does not restore attachments that were already sent', async () => {
+    const props = render()
+    await pickFile('a.pdf', 'application/pdf')
+    act(() => buttons()[buttons().length - 1].click())
+
+    act(() => {
+      root.render(<ChatInput {...props} sessionId="s2" />)
+    })
+    act(() => {
+      root.render(<ChatInput {...props} sessionId="s1" />)
+    })
+    expect(container.textContent).not.toContain('a.pdf')
+  })
+})
+
+describe('ChatInput file drag mention', () => {
+  it('inserts a workspace-relative @ reference without sending', () => {
+    const props = render()
+    requestMention('s1', ['/repo/src/main.rs'])
+
+    expect(textarea().value).toBe('@src/main.rs ')
+    expect(props.onSend).not.toHaveBeenCalled()
+  })
+
+  it('inserts at the last collapsed caret', () => {
+    render()
+    typeText('hello world', 5)
+    requestMention('s1', ['/repo/src/a.ts'])
+
+    expect(textarea().value).toBe('hello @src/a.ts  world')
+  })
+
+  it('appends to a never-focused draft', () => {
+    saveDraft('s1', 'draft text')
+    render()
+    requestMention('s1', ['/repo/src/a.ts'])
+
+    expect(textarea().value).toBe('draft text @src/a.ts ')
+  })
+
+  it('replaces an active @ token', () => {
+    render()
+    typeText('look @src', 9)
+    requestMention('s1', ['/repo/src/main.rs'])
+
+    expect(textarea().value).toBe('look @src/main.rs ')
+  })
+
+  it('skips paths outside the workspace and reports a warning', () => {
+    render()
+    requestMention('s1', ['/other/a.ts'])
+
+    expect(textarea().value).toBe('')
+    expect(useToastStore.getState().toasts).toEqual([
+      expect.objectContaining({ type: 'warning' }),
+    ])
+  })
+
+  it('skips paths that cannot be represented as @ tokens', () => {
+    render()
+    requestMention('s1', ['/repo/a b.ts'])
+
+    expect(textarea().value).toBe('')
+    expect(useToastStore.getState().toasts).toEqual([
+      expect.objectContaining({ type: 'warning' }),
+    ])
+  })
+
+  it('ignores mentions for another session', () => {
+    render()
+    requestMention('s2', ['/repo/a.ts'])
+
+    expect(textarea().value).toBe('')
+    expect(useChatStore.getState().pendingMention?.sessionId).toBe('s2')
+  })
+
+  it('consumes but does not insert while disabled', () => {
+    render({ disabled: true })
+    requestMention('s1', ['/repo/a.ts'])
+
+    expect(textarea().value).toBe('')
+    expect(useChatStore.getState().pendingMention).toBeNull()
+    expect(container.querySelector('[data-at-mention-drop="true"]')).toBeNull()
+  })
+
+  it('inserts exactly once under StrictMode', () => {
+    render({}, true)
+    requestMention('s1', ['/repo/a.ts'])
+
+    expect(textarea().value).toBe('@a.ts ')
   })
 })

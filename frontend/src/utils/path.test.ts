@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getParentPath, joinPath, isPathOutsideWorkspace, resolveRenamedPath, toAbsolutePath, findCoveringProject, findExactProject, parseLocalFilePath, looksLikeDirectory, isLikelyPathString } from './path'
+import { getParentPath, joinPath, isPathOutsideWorkspace, relativeToWorkspace, resolveRenamedPath, toAbsolutePath, findCoveringProject, findExactProject, parseLocalFilePath, looksLikeDirectory, isLikelyPathString } from './path'
 
 describe('getParentPath', () => {
   it('returns empty for root and empty input', () => {
@@ -77,6 +77,48 @@ describe('isPathOutsideWorkspace', () => {
   it('treats a file above the workspace root as outside', () => {
     expect(isPathOutsideWorkspace('/home/user/other.txt', '/home/user/proj')).toBe(true)
     expect(isPathOutsideWorkspace('/tmp/x', '/home/user/proj')).toBe(true)
+  })
+})
+
+describe('relativeToWorkspace', () => {
+  it('strips the workspace root and trailing slashes', () => {
+    expect(relativeToWorkspace('/home/user/proj/src/main.rs', '/home/user/proj')).toBe('src/main.rs')
+    expect(relativeToWorkspace('/home/user/proj/src/main.rs', '/home/user/proj/')).toBe('src/main.rs')
+    expect(relativeToWorkspace('/home/user/proj/src/main.rs/', '/home/user/proj')).toBe('src/main.rs')
+  })
+
+  it('returns empty when the path equals the root', () => {
+    expect(relativeToWorkspace('/home/user/proj', '/home/user/proj')).toBe('')
+    expect(relativeToWorkspace('/home/user/proj/', '/home/user/proj/')).toBe('')
+  })
+
+  it('handles filesystem root', () => {
+    expect(relativeToWorkspace('/etc/hosts', '/')).toBe('etc/hosts')
+    expect(relativeToWorkspace('/', '/')).toBeNull()
+  })
+
+  it('handles windows drive roots and separator normalization (case-insensitive drive)', () => {
+    expect(relativeToWorkspace('C:\\repo\\src\\a.ts', 'C:/repo')).toBe('src/a.ts')
+    expect(relativeToWorkspace('G:/Codes/ot/a.ts', 'g:/')).toBe('Codes/ot/a.ts')
+    expect(relativeToWorkspace('G:/Codes/ot/a.ts', 'G:/Codes/')).toBe('ot/a.ts')
+  })
+
+  it('rejects siblings and outside paths', () => {
+    expect(relativeToWorkspace('/home/user/proj2/file.txt', '/home/user/proj')).toBeNull()
+    expect(relativeToWorkspace('/tmp/x', '/home/user/proj')).toBeNull()
+    expect(relativeToWorkspace('relative/path', '/home/user/proj')).toBeNull()
+  })
+
+  it('rejects dot segments and empty segments', () => {
+    expect(relativeToWorkspace('/home/user/proj/a/../b', '/home/user/proj')).toBeNull()
+    expect(relativeToWorkspace('/home/user/proj/a/./b', '/home/user/proj')).toBeNull()
+    expect(relativeToWorkspace('/home/user/proj//a', '/home/user/proj')).toBeNull()
+  })
+
+  it('returns null without a workspace root', () => {
+    expect(relativeToWorkspace('/home/user/proj/a.ts', undefined)).toBeNull()
+    expect(relativeToWorkspace('/home/user/proj/a.ts', null)).toBeNull()
+    expect(relativeToWorkspace('/home/user/proj/a.ts', '')).toBeNull()
   })
 })
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
-import { useChatStore, selectChatState, storedRawRowToSyncPayload, dropInlinedSystemMessages, type ChatMessage } from '../../stores/chatStore'
+import { useChatStore, selectChatState, storedRawRowToSyncPayload } from '../../stores/chatStore'
 import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
 import { useAgentStore } from '../../stores/agentStore'
 import { useChatShortcuts } from '../../hooks/useChatShortcuts'
@@ -19,8 +19,12 @@ import { IconArrowDown } from '../FileManager/icons'
 import { READER_FONT } from '../../utils/fonts'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
-import { decodeStoredBlocks, isRawFrameWrapper, parseConfigOptions } from '../../hooks/useAcpChat'
+import { decodeStoredBlocks, parseConfigOptions } from '../../hooks/useAcpChat'
 import { postSyncPayload } from '../../utils/syncMessages'
+import { toChatMessages, type StoredMessage } from '../../utils/storedMessages'
+import { findSessionById } from '../../utils/sessionLookup'
+import { ChatSearchBar } from './ChatSearchBar'
+import type { ChatSearchHit } from '../../utils/chatSearch'
 import {
   clearChatScrollMemory,
   getChatScrollMemory,
@@ -65,73 +69,6 @@ const CHAT_STICK_THRESHOLD_PX = 24
  */
 const RESUME_CATCH_UP_GRACE_MS = 3_000
 
-/** `GET /messages` 响应里的单条消息。 */
-interface StoredMessage {
-  id: string
-  role: string
-  text: string
-  createdAt: string
-  blocks?: string | null
-  status?: string | null
-  /** turn 工作时长 / 等审批时长（ms）；null = 无记录（迁移前的历史行）。 */
-  durationMs?: number | null
-  waitMs?: number | null
-  /** 工具耗时（ms）与输出速率（tokens/s）估算；null = 无读数（历史行 / 跟踪失效 /
-   *  无可测流式窗口）。后端在 turn 定稿时结算并落库，刷新后常驻。 */
-  toolMs?: number | null
-  tps?: number | null
-  /** turn 定稿时刻（RFC3339）；null = 无记录（迁移前的历史行），该段不渲染。 */
-  finishedAt?: string | null
-}
-
-/**
- * DB 行 → `ChatMessage`。首屏 hydrate 与上拉分页共用同一转换，避免两份平行的
- * blocks 解码/兜底逻辑跑偏。blocks 解不出结构时回退纯文本（text 列
- * 超长会被后端折叠成头尾 + 「已省略 N 字符」标记，故兜底文本可能不完整，但一定可读）。
- */
-function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
-  const messages = rows.map((m) => {
-    // rawStored：blocks 来源为后端原始帧包裹（{"v":1,"frames":[...]}）且解码出
-    // 非空结构。useAcpChat 在 hydrate 落定后据此做带 dbId 的 cooked 回写收敛残留
-    // 体积（见 2026-08-18 计划方案 B）。解码失败/为空的 RAW 行不标记——回写纯文本
-    // 兜底会覆盖后端原始帧，堵死未来分类器升级后重新解释历史的路径。
-    let rawStored = m.blocks ? isRawFrameWrapper(m.blocks) : false
-    // text 列传给解码器：RAW 帧窗口行的 blocks 可能缺被驱逐的早期正文，
-    // 解码时用全量 text 补前缀（见 useAcpChat.prependEvictedProse）。
-    let blocks = m.blocks ? decodeStoredBlocks(m.blocks, m.text) : null
-    if (!blocks || blocks.length === 0) {
-      blocks = [{ type: 'text' as const, text: m.text }]
-      rawStored = false
-    }
-    return {
-      id: m.id,
-      // Hydrated rows carry their real DB id, so a later sync can target them exactly.
-      dbId: m.id,
-      // system 行（权限超时回收告知等）由后端写入，hydrate 后以 system 消息渲染。
-      role: m.role as ChatMessage['role'],
-      text: m.text,
-      blocks,
-      rawStored,
-      createdAt: new Date(m.createdAt).getTime(),
-      // 进行中 turn 的行以 streaming 还原，供 turn_snapshot / live 帧无缝续接。
-      streaming: m.status === 'streaming',
-      // 定稿读数读自 DB：turn 定稿时后端已结算（工作时长 / 工具耗时 / 速率 /
-      // 定稿时刻），刷新后仍在（前端不自算），历史行各自显示自己那一轮的值。
-      durationMs: m.durationMs,
-      waitMs: m.waitMs,
-      toolMs: m.toolMs,
-      tps: m.tps,
-      finishedAt: m.finishedAt,
-    }
-  })
-
-  // mid-turn SYSTEM 告知双轨落盘：assistant 行内联一份有序帧（供正确排序），
-  // 独立 system 行一份兜底（帧窗口驱逐后仍可回读）。assistant 行能解出同
-  // noticeId 时过滤独立行；解不出（帧被逐出 / 旧数据）则保留独立行——数据不丢，
-  // 只是回落到列表位置。收口逻辑与分页/合并共用同一函数。
-  return dropInlinedSystemMessages(messages)
-}
-
 /**
  * ChatView — the ACP-runtime counterpart to `Terminal.tsx`. Renders a
  * vertically stacked title bar + message list + input row.
@@ -155,7 +92,7 @@ export function ChatView() {
   const archivedSessions = useAppStore((s) => s.archivedSessions)
   const activeSession =
     activeSessionId
-      ? (Object.values(sessions).flat().find((s) => s.id === activeSessionId) ??
+      ? (findSessionById(sessions, activeSessionId) ??
         archivedSessions.find((s) => s.id === activeSessionId))
       : null
 
@@ -240,6 +177,20 @@ export function ChatView() {
   // 由下方「装配恢复令牌」layout effect 写入，贴底 layout effect 在 hydrated
   // 后消费一次。
   const pendingScrollRestoreRef = useRef<{ sid: string; top: number } | null>(null)
+  // 会话内搜索（F06）：Ctrl+F 打开（唯一入口——标题栏不放按钮，与像素标题条违和）；
+  // 命中未加载时拉「定位页」把消息窗口整体替换到目标附近（计划 D7/D8）。
+  const [searchOpen, setSearchOpen] = useState(false)
+  /** Ctrl+F 的「聚焦并全选」信号（连续 Ctrl+F = 改查下一项，FileEditor 同款口径）。 */
+  const [searchFocusRequest, setSearchFocusRequest] = useState(0)
+  /** 待跳转的消息 id：命中未加载时，窗口替换后目标气泡才进 DOM——等渲染落定
+   *  再滚动 + 闪烁（滚动时机由下方 layout effect 消费）。 */
+  const pendingJumpRef = useRef<string | null>(null)
+  /** 聊天面板根容器：供快捷键判定「键盘事件是否落在会话内」。 */
+  const chatRootRef = useRef<HTMLDivElement>(null)
+  /** 窗口是否已被替换成「定位页」：此时**更新的消息不在窗口内**（计划 D8 的
+   *  既定代价），标题栏给出「回到最新消息」出口——否则用户会卡在一段历史里
+   *  （「回到底部」只能回到这个窗口的底）。 */
+  const [historyReplaced, setHistoryReplaced] = useState(false)
 
   useEffect(() => {
     // agent 配置列表是聊天气泡兜底名称的来源（agents.display_name）。已释放会话
@@ -290,7 +241,7 @@ export function ChatView() {
           useChatStore.getState().setUsage(sid, data.usage as Record<string, unknown>)
         }
         if (!data?.messages?.length) return
-        useChatStore.getState().hydrate(sid, toChatMessages(data.messages), data.nextCursor ?? null)
+        useChatStore.getState().hydrate(sid, toChatMessages(data.messages, decodeStoredBlocks), data.nextCursor ?? null)
       })
       .catch(() => {})
       .finally(() => {
@@ -335,6 +286,7 @@ export function ChatView() {
       const data = await r.json().catch(() => null)
       const merged = toChatMessages(
         Array.isArray(data?.messages) ? (data.messages as StoredMessage[]) : [],
+        decodeStoredBlocks,
       )
       useChatStore.getState().mergeLatestMessages(sid, merged)
       // RAW 残留收敛（2026-08-18 方案 B 同源）：turn 在断连期间结束 ⇒ prompt_done
@@ -452,7 +404,7 @@ export function ChatView() {
       prependAnchorRef.current = el ? { sid, scrollHeight: el.scrollHeight } : null
       useChatStore
         .getState()
-        .prependMessages(sid, toChatMessages(data?.messages ?? []), data?.nextCursor ?? null)
+        .prependMessages(sid, toChatMessages(data?.messages ?? [], decodeStoredBlocks), data?.nextCursor ?? null)
     } catch {
       // 网络失败：清 in-flight 但保留游标，用户再次上拉即重试。
       prependAnchorRef.current = null
@@ -665,10 +617,36 @@ export function ChatView() {
     return () => ro.disconnect()
   }, [isLastPromptAboveViewport, pinToBottom])
 
+  // 高亮闪烁（目标气泡 accent 描边 + ring 闪烁）：「上次输入」跳转与搜索结果
+  // 跳转共用同一套机制（计划 D9——不新造一条高亮通道）。
+  // 同一目标已在闪烁中再点一次时，先摘 class、下一帧重挂，CSS 动画得以重放。
+  const flashMessage = useCallback(
+    (messageId: string) => {
+      if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
+      if (flashRafRef.current !== null) window.cancelAnimationFrame(flashRafRef.current)
+      const armFlash = () => {
+        setHighlightedMessageId(messageId)
+        flashTimerRef.current = window.setTimeout(() => {
+          setHighlightedMessageId(null)
+          flashTimerRef.current = null
+        }, CHAT_MSG_FLASH_MS)
+      }
+      if (highlightedMessageId === messageId) {
+        setHighlightedMessageId(null)
+        flashRafRef.current = window.requestAnimationFrame(() => {
+          flashRafRef.current = null
+          armFlash()
+        })
+      } else {
+        armFlash()
+      }
+    },
+    [highlightedMessageId],
+  )
+
   // 跳转聚焦「上次输入」：滚动让目标气泡落到悬浮卡片下方（卡片悬浮在消息区顶缘，
   // 不让位会正好盖住目标），再短暂 accent 描边闪烁。
   // 高亮经 highlighted prop 传入 ChatMessageView（memo 浅比较，仅目标气泡重渲染）。
-  // 同一目标已在闪烁中再点一次时，先摘 class、下一帧重挂，CSS 动画得以重放。
   // id 来源为前端 genId（uuid / msg-<数字>）与后端 uuid 行 id，均不含选择器
   // 元字符，属性选择器无需转义（CSS.escape 在 jsdom 测试环境不可用）。
   const handleJumpToLastPrompt = () => {
@@ -683,31 +661,109 @@ export function ChatView() {
       bubble.getBoundingClientRect().top -
       el.getBoundingClientRect().top -
       (CHAT_PROMPT_CARD_TOP_PX + cardH + CHAT_JUMP_TOP_GAP_PX)
-    if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
-    if (flashRafRef.current !== null) window.cancelAnimationFrame(flashRafRef.current)
-    const armFlash = () => {
-      setHighlightedMessageId(lastUserMessage.id)
-      flashTimerRef.current = window.setTimeout(() => {
-        setHighlightedMessageId(null)
-        flashTimerRef.current = null
-      }, CHAT_MSG_FLASH_MS)
-    }
-    if (highlightedMessageId === lastUserMessage.id) {
-      setHighlightedMessageId(null)
-      flashRafRef.current = window.requestAnimationFrame(() => {
-        flashRafRef.current = null
-        armFlash()
-      })
-    } else {
-      armFlash()
-    }
+    flashMessage(lastUserMessage.id)
   }
 
-  // ACP 会话窗口键盘快捷键集中管理（Shift+Tab 切换 mode 等）。
+  // 滚动到指定消息气泡并闪烁（搜索结果跳转用）：目标滚到视口中部——既避开顶部
+  // 悬浮的「上次输入」卡片，也不贴底（贴底会被跟随逻辑拉回底部）。
+  const jumpToMessage = useCallback(
+    (messageId: string) => {
+      const el = scrollRef.current
+      if (!el) return
+      const bubble = el.querySelector<HTMLElement>(`[data-chat-msg-id="${messageId}"]`)
+      if (!bubble) return
+      const bubbleRect = bubble.getBoundingClientRect()
+      const elRect = el.getBoundingClientRect()
+      el.scrollTop += bubbleRect.top - elRect.top - (el.clientHeight - bubbleRect.height) / 2
+      flashMessage(messageId)
+    },
+    [flashMessage],
+  )
+
+  // 搜索结果跳转（计划 D7/D8）：命中已在窗口内 → 直接滚 + 闪；**不在**（命中消息
+  // 通常还没被前端加载）→ 拉「定位页」把窗口整体替换到目标附近，再滚 + 闪。
+  const handleSearchJump = useCallback(
+    async (hit: ChatSearchHit) => {
+      const sid = activeSessionId
+      if (!sid) return
+      const messages = useChatStore.getState().states[sid]?.messages ?? []
+      const inWindow = messages.some((m) => m.id === hit.id || m.dbId === hit.id)
+      if (!inWindow) {
+        try {
+          const r = await fetch(
+            `/api/v1/sessions/${encodeURIComponent(sid)}/messages?at=${encodeURIComponent(hit.cursor)}`,
+          )
+          if (!r.ok) return
+          const data = await r.json()
+          // 定位页**替换**窗口（D8）：前插会让目标与已加载的新消息之间出现空洞，
+          // 滚动位置计算随之失真；替换后「继续上翻加载更早」从该页最旧行接上。
+          useChatStore
+            .getState()
+            .replaceMessages(
+              sid,
+              toChatMessages(data?.messages ?? [], decodeStoredBlocks),
+              data?.nextCursor ?? null,
+            )
+          // 目标气泡此刻才进 DOM——记下待跳转目标，由下方 layout effect 消费。
+          pendingJumpRef.current = hit.id
+          setHistoryReplaced(true)
+        } catch {
+          // 定位页拉取失败：留在原地（检索是旁路能力，不该打断聊天）。
+        }
+        return
+      }
+      jumpToMessage(hit.id)
+    },
+    [activeSessionId, jumpToMessage],
+  )
+
+  // 回到最新消息：把窗口换回最新一页（定位页替换后更新的消息不在窗口内）。
+  const handleBackToLatest = useCallback(async () => {
+    const sid = activeSessionId
+    if (!sid) return
+    try {
+      const r = await fetch(`/api/v1/sessions/${encodeURIComponent(sid)}/messages`)
+      if (!r.ok) return
+      const data = await r.json()
+      useChatStore
+        .getState()
+        .replaceMessages(
+          sid,
+          toChatMessages(data?.messages ?? [], decodeStoredBlocks),
+          data?.nextCursor ?? null,
+        )
+      setHistoryReplaced(false)
+    } catch {
+      // 拉取失败：保持现状（用户可再点一次）。
+    }
+  }, [activeSessionId])
+
+  // 窗口替换后目标气泡才进 DOM：等消息列表落定再滚动 + 闪烁（layout effect：
+  // 必须在浏览器绘制前完成滚动，否则会先看到视口停在别处、再跳过去）。
+  useLayoutEffect(() => {
+    const targetId = pendingJumpRef.current
+    if (!targetId) return
+    pendingJumpRef.current = null
+    jumpToMessage(targetId)
+  }, [chatState.messages, jumpToMessage])
+
+  // 切会话时收起搜索条并清空结果：ChatView 跨 acp→acp 切换**不重挂载**，不收的话
+  // 上一会话的命中会串到新会话（计划 Phase 2）。
+  useEffect(() => {
+    setSearchOpen(false)
+    setHistoryReplaced(false)
+  }, [activeSessionId])
+
+  // ACP 会话窗口键盘快捷键集中管理（Shift+Tab 切换 mode、Ctrl+F 打开搜索等）。
   // 必须置于所有提前 return 之前，遵守 React Hooks 调用顺序规则。
   const onKeyDown = useChatShortcuts({
     configOptions: chatState.configOptions,
     setConfigOption,
+    rootRef: chatRootRef,
+    onSearch: () => {
+      setSearchOpen(true)
+      setSearchFocusRequest((n) => n + 1)
+    },
   })
 
   const handleSend = useCallback(
@@ -849,6 +905,7 @@ export function ChatView() {
 
   return (
     <div
+      ref={chatRootRef}
       onKeyDown={onKeyDown}
       style={{
         height: '100%',
@@ -856,6 +913,8 @@ export function ChatView() {
         flexDirection: 'column',
         background: 'var(--bg-base)',
         fontFamily: READER_FONT,
+        // 搜索条是浮层（绝对定位到面板右上角），定位基准是本容器。
+        position: 'relative',
       }}
     >
       <div className="panel-title-bar">
@@ -877,12 +936,35 @@ export function ChatView() {
           </span>
         )}
         <span className="title-bar-spacer" />
+        {/* 定位页替换窗口后更新的消息不在窗口内——给出「回到最新」出口。 */}
+        {historyReplaced && (
+          <button
+            type="button"
+            className="panel-title-bar-text-btn"
+            onClick={() => void handleBackToLatest()}
+            title={t('chat.search.backToLatest')}
+          >
+            {t('chat.search.backToLatest')}
+          </button>
+        )}
+        {/* 会话内搜索（F06）**没有独立入口按钮**：只在焦点落在聊天面板内时用
+            Ctrl/Cmd+F 唤起（计划 D11）。标题栏挂图标按钮与该面板的像素标题条
+            观感违和（用户实测反馈），故入口只留快捷键。 */}
         {/* 用量是会话级状态（上下文占用 / 费用），与 LIVE/DEAD 徽章同类；放在
             配置控制区会既挤占窄屏又把「只报用量不发配置」的 agent 渲染成一条
             只有圆环的配置栏。 */}
         {chatState.usage && <UsageIndicator usage={chatState.usage} compact={isMobile} />}
         {titleChip}
       </div>
+
+      {searchOpen && (
+        <ChatSearchBar
+          sessionId={activeSessionId ?? ''}
+          focusRequest={searchFocusRequest}
+          onJump={(hit) => void handleSearchJump(hit)}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
 
       <div
         style={{
@@ -1181,6 +1263,7 @@ export function ChatView() {
           commands={chatState.commands}
           imageSupported={chatState.imageSupported}
           fileSupported={chatState.embeddedContextSupported}
+          workspacePath={activeSession?.workspace_path}
         />
       </div>
 

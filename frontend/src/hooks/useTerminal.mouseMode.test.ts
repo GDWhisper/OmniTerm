@@ -11,6 +11,8 @@
 //   ⑤ wheel 放行分支：mouseTrackingMode 非 'none' 时 handler 返回 true；
 //   ⑥ 非白名单取值（mouse_mode / mouse_encoding 任一）→ 运行期白名单整体
 //      跳过（performance-and-safety.md S1：枚举外部输入显式白名单校验）。
+// 另含右键拦截用例（2026-10-22）：鼠标上报激活时 TUI 的 button 2 与浏览器
+// 原生 contextmenu 抢交互，按 mouseTrackingMode 条件拦截、Shift 留逃生口。
 // 真实 xterm 解析态翻转契约见 useTerminal.mouseSync.test.ts。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
@@ -99,7 +101,7 @@ function Probe(props: { sessionId: string | null; onResult: (r: HookResult) => v
   return null
 }
 
-describe('useTerminal 鼠标上报模式中继（cell_frame → DECSET 同步 xterm）', () => {
+describe('useTerminal 鼠标上报模式中继与右键拦截', () => {
   let root: Root
   let hook: HookResult
 
@@ -138,12 +140,18 @@ describe('useTerminal 鼠标上报模式中继（cell_frame → DECSET 同步 xt
     rafQueue = []
   })
 
-  /** 建 terminal + WS 连接并 open，返回 {ws, term}。 */
-  async function mountAndConnect(): Promise<{ ws: FakeWebSocket; term: FakeXterm }> {
+  /** 建 terminal + WS 连接并 open，返回 {ws, term, container, cleanup}。 */
+  async function mountAndConnect(): Promise<{
+    ws: FakeWebSocket
+    term: FakeXterm
+    container: HTMLDivElement
+    cleanup: () => void
+  }> {
     const container = document.createElement('div')
     document.body.appendChild(container)
+    let cleanup: (() => void) | undefined
     await act(async () => {
-      hook.initTerminal(container)
+      cleanup = hook.initTerminal(container)
       for (let i = 0; i < 50 && FakeWebSocket.instances.length === 0; i++) {
         await new Promise((r) => setTimeout(r, 5))
       }
@@ -156,7 +164,7 @@ describe('useTerminal 鼠标上报模式中继（cell_frame → DECSET 同步 xt
     // 隔离 write 记录：状态行走 writeln（不记录），rAF 未 flush 帧渲染也不入 writes；
     // 显式清空保证断言只看同步块的写入。
     ;(term as FakeXterm).writes.length = 0
-    return { ws: ws as FakeWebSocket, term: term as FakeXterm }
+    return { ws: ws as FakeWebSocket, term: term as FakeXterm, container, cleanup: cleanup! }
   }
 
   /** 一帧与 FakeXterm 尺寸一致的全帧（不触发 resize 补发）。 */
@@ -238,5 +246,50 @@ describe('useTerminal 鼠标上报模式中继（cell_frame → DECSET 同步 xt
     expect(term.wheelHandler).toBeTruthy()
     term.modes.mouseTrackingMode = 'drag'
     expect(term.wheelHandler!({} as WheelEvent)).toBe(true)
+  })
+
+  // ── 右键拦截（2026-10-22）──
+  // 鼠标上报激活时 xterm 已把 button 2 上报给 PTY；浏览器原生 contextmenu
+  // 若同时弹出会抢走 TUI 的右键交互。拦截条件 = 非 none 且未按 Shift。
+  function fireContextMenu(container: HTMLElement, shiftKey = false): MouseEvent {
+    const target = container.querySelector('.xterm') ?? container
+    const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey })
+    target.dispatchEvent(ev)
+    return ev
+  }
+
+  it('mouseTrackingMode=none → 不拦截原生右键菜单（普通 shell 保留复制/粘贴入口）', async () => {
+    const { container } = await mountAndConnect()
+    const ev = fireContextMenu(container)
+    expect(ev.defaultPrevented).toBe(false)
+  })
+
+  it('mouseTrackingMode 非 none → 拦截并阻止冒泡（不与 TUI 的 button 2 抢右键）', async () => {
+    const { container, term } = await mountAndConnect()
+    ;(term as FakeXterm).modes.mouseTrackingMode = 'drag'
+    const bubbleSpy = vi.fn()
+    document.body.addEventListener('contextmenu', bubbleSpy)
+    try {
+      const ev = fireContextMenu(container)
+      expect(ev.defaultPrevented).toBe(true)
+      expect(bubbleSpy).not.toHaveBeenCalled()
+    } finally {
+      document.body.removeEventListener('contextmenu', bubbleSpy)
+    }
+  })
+
+  it('鼠标上报期间 Shift+右键放行 → xterm 强制选择、不上报鼠标，原生菜单可用', async () => {
+    const { container, term } = await mountAndConnect()
+    ;(term as FakeXterm).modes.mouseTrackingMode = 'any'
+    const ev = fireContextMenu(container, true)
+    expect(ev.defaultPrevented).toBe(false)
+  })
+
+  it('终端销毁后监听器移除 → 右键不再被拦截', async () => {
+    const { container, term, cleanup } = await mountAndConnect()
+    ;(term as FakeXterm).modes.mouseTrackingMode = 'drag'
+    act(() => cleanup())
+    const ev = fireContextMenu(container)
+    expect(ev.defaultPrevented).toBe(false)
   })
 })

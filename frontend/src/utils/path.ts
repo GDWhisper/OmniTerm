@@ -89,6 +89,53 @@ export function isPathOutsideWorkspace(filePath: string, workspaceRoot: string |
 }
 
 /**
+ * 把绝对路径换算成相对 workspace 根的路径（FileManager → ChatInput @ 引用）。
+ *
+ * - 分隔符归一为 `/`，尾随斜杠忽略；支持 POSIX 根 `/` 与 Windows 盘符根（盘符不区分大小写）。
+ * - 路径等于根 → `''`；根外/相对路径/空根 → `null`。
+ * - 含 `.` / `..` 或空段的路径返回 `null`：绝对路径本应已规范化，出现这些形态说明来源不可靠，
+ *   不把歧义路径交给后端 @ 解析（后端失败时只留 debug 日志，用户侧无感知）。
+ */
+export function relativeToWorkspace(
+  absPath: string,
+  workspaceRoot: string | undefined | null,
+): string | null {
+  if (!workspaceRoot) return null
+  const path = absPath.replace(/\\/g, '/').trim()
+  const root = workspaceRoot.replace(/\\/g, '/').trim()
+  if (!path || !root) return null
+
+  const pathNoSlash = path.replace(/\/+$/, '')
+  const rootNoSlash = root.replace(/\/+$/, '')
+  const rootIsFsRoot = rootNoSlash === ''
+
+  let relative: string | null
+  if (rootIsFsRoot) {
+    relative = pathNoSlash.startsWith('/') ? pathNoSlash.slice(1) : null
+  } else {
+    const pathCmp = normalizeDriveCase(pathNoSlash)
+    const rootCmp = normalizeDriveCase(rootNoSlash)
+    if (pathCmp === rootCmp) {
+      relative = ''
+    } else if (pathCmp.startsWith(rootCmp + '/')) {
+      relative = pathNoSlash.slice(rootNoSlash.length + 1)
+    } else {
+      relative = null
+    }
+  }
+
+  if (relative === null || relative === '') return relative
+  const segments = relative.split('/')
+  if (segments.some((s) => s === '' || s === '.' || s === '..')) return null
+  return relative
+}
+
+/** 盘符大小写不敏感（`G:/Codes` 与 `g:/Codes` 是同一根）；其余部分保持原样。 */
+function normalizeDriveCase(path: string): string {
+  return /^[A-Za-z]:/.test(path) ? path[0].toLowerCase() + path.slice(1) : path
+}
+
+/**
  * 外部改名事件路径还原：drawer 打开文件的绝对路径 `absPath` 以「/ + from（相对 watch 根的
  * 旧路径）」结尾时，前缀即 watch 根，据此把 `to`（相对 watch 根的新路径）还原成新的绝对路径。
  *

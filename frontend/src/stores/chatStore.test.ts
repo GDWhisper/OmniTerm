@@ -688,6 +688,93 @@ describe('applyTurnSnapshot 内联 SYSTEM 去重', () => {
   })
 })
 
+describe('applyTurnSnapshot 收编被 SYSTEM 行切开的 streaming 分身', () => {
+  beforeEach(() => {
+    useChatStore.setState({ states: {} })
+  })
+
+  it('收编本轮所有 streaming assistant，快照落尾且保留中间的 SYSTEM 行', () => {
+    const s = useChatStore.getState()
+    s.hydrate('s1', [
+      { id: 'u1', role: 'user', text: 'q', blocks: [{ type: 'text', text: 'q' }], createdAt: 1 },
+      {
+        id: 'a-before',
+        role: 'assistant',
+        text: 'before',
+        blocks: [{ type: 'text', text: 'before' }],
+        createdAt: 2,
+        streaming: true,
+      },
+      {
+        id: 'sys-mid',
+        role: 'system',
+        text: '[CurrentModeUpdate]',
+        blocks: [{ type: 'system', label: 'CurrentModeUpdate' }],
+        createdAt: 3,
+      },
+      {
+        id: 'a-after',
+        role: 'assistant',
+        text: 'after',
+        blocks: [{ type: 'text', text: 'after' }],
+        createdAt: 4,
+        streaming: true,
+      },
+    ], null)
+
+    s.applyTurnSnapshot('s1', {
+      rowId: 'row-1',
+      text: 'beforeafter',
+      blocks: [{ type: 'text', text: 'beforeafter' }],
+    })
+
+    const msgs = useChatStore.getState().states['s1'].messages
+    // 两个 streaming 分身都被快照收编，SYSTEM 行原位保留；快照在末尾，
+    // 后续 live 帧才能继续挂到它上面。
+    expect(msgs.map((m) => m.id)).toEqual(['u1', 'sys-mid', 'row-1'])
+    expect(msgs[2]).toMatchObject({
+      id: 'row-1',
+      dbId: 'row-1',
+      role: 'assistant',
+      streaming: true,
+      createdAt: 4,
+    })
+    expect(msgs.filter((m) => m.role === 'assistant')).toHaveLength(1)
+  })
+
+  it('已在库里的快照行也移到尾部，避免尾部 SYSTEM 行再次把后续帧拆成新消息', () => {
+    const s = useChatStore.getState()
+    s.hydrate('s1', [
+      {
+        id: 'row-1',
+        dbId: 'row-1',
+        role: 'assistant',
+        text: 'early',
+        blocks: [{ type: 'text', text: 'early' }],
+        createdAt: 2,
+        streaming: true,
+      },
+      {
+        id: 'sys-mid',
+        role: 'system',
+        text: '[notice]',
+        blocks: [{ type: 'system', label: 'notice' }],
+        createdAt: 3,
+      },
+    ], null)
+
+    s.applyTurnSnapshot('s1', {
+      rowId: 'row-1',
+      text: 'early',
+      blocks: [{ type: 'text', text: 'early' }],
+    })
+
+    const msgs = useChatStore.getState().states['s1'].messages
+    expect(msgs.map((m) => m.id)).toEqual(['sys-mid', 'row-1'])
+    expect(msgs[1].streaming).toBe(true)
+  })
+})
+
 describe('storedRawRowToSyncPayload (方案 B：hydrate 后收敛 RAW 残留行)', () => {
   function mk(overrides: Partial<ChatMessage> & { role: ChatMessage['role'] }): ChatMessage {
     return {

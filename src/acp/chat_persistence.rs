@@ -102,7 +102,7 @@ pub async fn list_messages_page(
 
     // Newest-first so the page can be cut from the newest end; reversed to oldest-first
     // before returning. One extra row is fetched to detect "there is an older page".
-    let mut rows: Vec<ChatMessageRow> = sqlx::query_as(
+    let rows: Vec<ChatMessageRow> = sqlx::query_as(
         "SELECT role, text, created_at, id, blocks, status, last_seq, duration_ms, wait_ms, \
                 tool_ms, tps, finished_at \
          FROM chat_messages \
@@ -119,6 +119,14 @@ pub async fn list_messages_page(
     .fetch_all(db)
     .await?;
 
+    Ok(finalize_page(rows, limit, max_bytes))
+}
+
+/// 页的收尾：字节预算裁剪 + 反转（oldest-first 输出）+ next cursor 计算。
+///
+/// 两处取页（普通分页 / 定位页）共用同一套预算语义——拆出去是为了让两条路径
+/// 不各写一份（禁 Copy-Paste），改预算口径时只改这一处。
+fn finalize_page(mut rows: Vec<ChatMessageRow>, limit: usize, max_bytes: usize) -> MessagePage {
     let more_by_count = rows.len() > limit;
     rows.truncate(limit);
 
@@ -144,7 +152,279 @@ pub async fn list_messages_page(
         None
     };
 
-    Ok(MessagePage { rows, next_cursor })
+    MessagePage { rows, next_cursor }
+}
+
+/// 定位页：以 `at` 指向的行为**最新行**取一页（倒序取 N 行后反转），供前端把
+/// 消息窗口整体替换到目标附近（F06 D7）。
+///
+/// 为什么要有这个端点：命中消息通常**还没被前端加载**（首屏只取最近一页），
+/// 用 `?before=` 一页页往前翻到目标需要 O(页数) 次请求、最坏传几百 MB——
+/// 不可接受。定位页一次查询解决（D7）。
+///
+/// 语义：返回的行**含目标行**且目标行是**最新**的那一行；`next_cursor` 指向本页
+/// 最旧行，前端替换窗口后继续上翻即从这里接上（D8）。
+pub async fn list_messages_page_at(
+    db: &SqlitePool,
+    session_id: &str,
+    at: &MessageCursor,
+    limit: usize,
+    max_bytes: usize,
+) -> Result<MessagePage, sqlx::Error> {
+    let limit = limit.max(1);
+    // 与 list_messages_page 同序（created_at DESC, id DESC）：`id <= ?` 保证同一秒内
+    // 的并列行里目标行也在页内。
+    let rows: Vec<ChatMessageRow> = sqlx::query_as(
+        "SELECT role, text, created_at, id, blocks, status, last_seq, duration_ms, wait_ms, \
+                tool_ms, tps, finished_at \
+         FROM chat_messages \
+         WHERE session_id = ? \
+           AND (created_at < ? OR (created_at = ? AND id <= ?)) \
+         ORDER BY created_at DESC, id DESC LIMIT ?",
+    )
+    .bind(session_id)
+    .bind(&at.created_at)
+    .bind(&at.created_at)
+    .bind(&at.id)
+    .bind((limit + 1) as i64)
+    .fetch_all(db)
+    .await?;
+
+    Ok(finalize_page(rows, limit, max_bytes))
+}
+
+// ── 会话内全文检索（F06，计划 docs/dev/plans/2026-10-21-acp-chat-fulltext-search.md）──
+//
+// **为什么用 LIKE 而不是 FTS5**（计划 D1/D2 的实测结论）：搜索范围天然被「一个会话」
+// 框住，LIKE 全表扫描在真实量级够快（实测 5000 行/20MB = 28ms、20000 行/77MB =
+// 51ms），而 FTS5（trigram）实测让 DB 涨 6.7×，还要搭一套迁移 + 触发器 + 中文分词
+// ADR——为一个会话级搜索付这个代价是过度设计。LIKE 还**天然支持中文子串**
+// （原 X02 担心的「unicode61 不切中文」在 LIKE 方案下根本不存在）。
+// 升级条件是量化的：会话文本量 p99 > 20MB 或单次检索 p99 > 200ms 时才上 FTS5（D2）。
+
+/// 扫描预算·行数：只检索会话内**最近 N 行**（索引
+/// `idx_chat_messages_session(session_id, created_at)` 让这个范围扫描有界）。
+pub const MAX_SEARCH_ROWS: usize = 20_000;
+/// 扫描预算·文本字节：与行数是**两个独立轴**——一万条短消息与五十条长消息的
+/// 行数/字节量级完全不同，只限一个维度等于没限（计划 D4）。
+pub const MAX_SEARCH_BYTES: usize = 16 * 1024 * 1024;
+/// 关键词个数上限：每个词一次 LIKE 扫描，成本与词数线性（计划 D5）。
+pub const MAX_SEARCH_TERMS: usize = 8;
+/// 返回条数上限：响应体积有界（计划 D13）。
+pub const MAX_SEARCH_RESULTS: usize = 100;
+/// 命中片段的最大字符数（超出部分以省略号标注）。
+const SEARCH_SNIPPET_MAX_CHARS: usize = 160;
+
+/// 一条检索命中。
+///
+/// 序列化用 camelCase（与本仓其它 HTTP 响应一致——`createdAt` / `nextCursor` 等）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    /// 消息行 id（DB 主键）——前端据此判断「是否已在窗口内」。
+    pub id: String,
+    /// 角色（user / assistant；system 行不参与检索）。
+    pub role: String,
+    /// 消息时刻（RFC3339, UTC）。
+    pub created_at: String,
+    /// 命中片段：首个命中词周围的截断文本。
+    pub snippet: String,
+    /// 定位游标（`<created_at>|<id>`）：前端据此请求「定位页」把窗口挪到目标附近。
+    pub cursor: String,
+}
+
+/// 检索结果。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+    /// 命中项（按时间倒序，最多 `MAX_SEARCH_RESULTS` 条）。
+    pub hits: Vec<SearchHit>,
+    /// 扫描窗口内命中的行数（`more_matches` 为真时这是下界）。
+    pub match_count: usize,
+    /// 命中数超过返回上限——还有更多命中没列出来（UI 必须如实说明）。
+    pub more_matches: bool,
+    /// 实际参与检索的行数 / 文本字节数（预算触顶时小于会话总量）。
+    pub scanned_rows: usize,
+    pub scanned_bytes: usize,
+    /// 预算触顶：**更早的内容没有参与检索**。UI 必须显式标注省略量——
+    /// 静默截断会让用户以为搜全了，比搜不到更糟（计划 D4）。
+    pub truncated: bool,
+    /// 关键词数超上限被截断（用户以为搜了全部词，实际只搜了前 N 个）。
+    pub terms_truncated: bool,
+}
+
+/// 转义 LIKE 通配符（计划 D6，§S1 外部输入进 SQL 前必须 sanitize）：
+/// 用户搜 `100%` 必须匹配字面 `100%`，不能变成「以 100 开头」。
+/// 与 SQL 里的 `ESCAPE '\'` 一一对应。
+fn escape_like_term(term: &str) -> String {
+    let mut out = String::with_capacity(term.len() + 8);
+    for ch in term.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// 命中片段：取首个命中词周围的窗口，超出部分以省略号标注（计划 D13）。
+fn build_snippet(text: &str, terms: &[&str], max_chars: usize) -> String {
+    let max_chars = max_chars.max(1);
+    let lower = text.to_lowercase();
+    // 首个命中词的位置（字节偏移；`find` 返回的一定是字符边界）。
+    let mut first: Option<usize> = None;
+    for term in terms {
+        let needle = term.to_lowercase();
+        if needle.is_empty() {
+            continue;
+        }
+        if let Some(pos) = lower.find(&needle) {
+            first = Some(match first {
+                Some(best) => best.min(pos),
+                None => pos,
+            });
+        }
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let total = chars.len();
+    let (start, end) = match first {
+        Some(byte_pos) => {
+            let char_pos = text[..byte_pos].chars().count();
+            // 命中词靠前时多留点前文（用户要看到上下文），其余往后铺。
+            let start = char_pos.saturating_sub(max_chars / 3);
+            (start, (start + max_chars).min(total))
+        }
+        None => (0, max_chars.min(total)),
+    };
+    let mut snippet: String = chars[start..end].iter().collect();
+    if start > 0 {
+        snippet.insert(0, '…');
+    }
+    if end < total {
+        snippet.push('…');
+    }
+    snippet
+}
+
+/// 会话内全文检索：按关键词（空格分隔、AND 语义）匹配消息正文。
+///
+/// 预算语义（计划 D4，两个独立轴，任一触顶即停并显式标注）：
+/// - **行数**：`MAX_SEARCH_ROWS`——只扫会话内最近 N 行（索引让范围扫描有界）。
+/// - **字节**：`MAX_SEARCH_BYTES`——累计参与检索的文本字节。
+///
+/// 实现分两步，为的是**别把大文本搬进内存**：
+/// 1. 候选窗口：只取 `(id, created_at, LENGTH(text))`（不取 text 本体），
+///    在 Rust 侧累计字节并定出「参与检索的范围」；
+/// 2. 在该范围内做 LIKE 匹配，取命中行。
+///
+/// 两步都走 `idx_chat_messages_session(session_id, created_at)`，范围扫描有界。
+///
+/// 只搜 `text`（对话正文），**不搜 `blocks`**（工具调用 / 思考内容是 JSON、MB 级，
+/// 且工具输出常含大段代码，搜索噪声大）；`system` 行（宿主内部事件）不参与检索。
+pub async fn search_session_messages(
+    db: &SqlitePool,
+    session_id: &str,
+    terms: &[String],
+    max_rows: usize,
+    max_bytes: usize,
+) -> Result<SearchResult, sqlx::Error> {
+    let max_rows = max_rows.max(1);
+    // 关键词数上限（计划 D5）：超出的词被丢弃并如实上报 `terms_truncated`——
+    // 静默丢词会让结果看起来像「全部词都匹配上了」。
+    let terms_truncated = terms.len() > MAX_SEARCH_TERMS;
+    let used_terms: Vec<&str> = terms.iter().take(MAX_SEARCH_TERMS).map(|s| s.as_str()).collect();
+
+    if used_terms.is_empty() {
+        return Ok(SearchResult {
+            hits: Vec::new(),
+            match_count: 0,
+            more_matches: false,
+            scanned_rows: 0,
+            scanned_bytes: 0,
+            truncated: false,
+            terms_truncated,
+        });
+    }
+
+    // ① 候选窗口：最近 N 行，只取 id / 时刻 / 文本长度（不取文本本体）。
+    let candidates: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT id, created_at, LENGTH(text) FROM chat_messages \
+         WHERE session_id = ? AND role <> 'system' \
+         ORDER BY created_at DESC, id DESC LIMIT ?",
+    )
+    .bind(session_id)
+    .bind(max_rows as i64)
+    .fetch_all(db)
+    .await?;
+
+    // 预算：行数触顶（候选窗口取满 ⇒ 后面还有更早的行没参与检索）与字节触顶
+    // 都要显式上报，不能让用户以为搜全了。
+    let mut truncated = candidates.len() >= max_rows;
+    let mut scanned_rows = 0usize;
+    let mut scanned_bytes = 0usize;
+    // 参与检索的范围下界：最后一个纳入预算的行（含）。范围用
+    // (created_at, id) 元组表达——created_at 只到秒，同秒并列行靠 id 定序。
+    let mut boundary: Option<(String, String)> = None;
+    for (id, created_at, len) in &candidates {
+        let len = (*len).max(0) as usize;
+        // 至少保留一行（与分页同口径）：单条就超预算的消息也要能被搜到。
+        if boundary.is_some() && scanned_bytes + len > max_bytes {
+            truncated = true;
+            break;
+        }
+        scanned_bytes += len;
+        scanned_rows += 1;
+        boundary = Some((created_at.clone(), id.clone()));
+    }
+
+    // ② 范围内做 LIKE 匹配（多词 AND：每个词都要在同一行出现，位置任意）。
+    let mut sql = String::from(
+        "SELECT id, role, text, created_at FROM chat_messages \
+         WHERE session_id = ? AND role <> 'system'",
+    );
+    if boundary.is_some() {
+        sql.push_str(" AND (created_at > ? OR (created_at = ? AND id >= ?))");
+    }
+    for _ in &used_terms {
+        sql.push_str(" AND text LIKE ? ESCAPE '\\'");
+    }
+    sql.push_str(" ORDER BY created_at DESC, id DESC LIMIT ?");
+
+    let mut query = sqlx::query_as::<_, (String, String, String, String)>(&sql);
+    query = query.bind(session_id);
+    if let Some((b_at, b_id)) = &boundary {
+        query = query.bind(b_at).bind(b_at).bind(b_id);
+    }
+    for term in &used_terms {
+        query = query.bind(format!("%{}%", escape_like_term(term)));
+    }
+    // 多取一条用来判断「命中数超过返回上限」。
+    let rows: Vec<(String, String, String, String)> =
+        query.bind((MAX_SEARCH_RESULTS + 1) as i64).fetch_all(db).await?;
+
+    let more_matches = rows.len() > MAX_SEARCH_RESULTS;
+    let hits: Vec<SearchHit> = rows
+        .into_iter()
+        .take(MAX_SEARCH_RESULTS)
+        .map(|(id, role, text, created_at)| SearchHit {
+            cursor: MessageCursor { created_at: created_at.clone(), id: id.clone() }.encode(),
+            snippet: build_snippet(&text, &used_terms, SEARCH_SNIPPET_MAX_CHARS),
+            id,
+            role,
+            created_at,
+        })
+        .collect();
+    let match_count = hits.len();
+
+    Ok(SearchResult {
+        hits,
+        match_count,
+        more_matches,
+        scanned_rows,
+        scanned_bytes,
+        truncated,
+        terms_truncated,
+    })
 }
 
 /// A persisted chat message row.
@@ -971,6 +1251,182 @@ mod tests {
         .expect("fetch totals");
         assert_eq!((totals.0, totals.1, totals.2), (1500, 200, 2), "两次 turn 应累加");
         assert!(totals.3.is_some(), "定稿时刻应随最后一次 turn 写入");
+    }
+
+    // ── 会话内全文检索（F06，计划 docs/dev/plans/2026-10-21-acp-chat-fulltext-search.md）──
+
+    fn terms(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn search_matches_chinese_substring_without_tokenizer() {
+        let db = fresh_db().await;
+        seed_row(&db, "m1", "assistant", "上下文窗口很长", "2026-08-10T00:00:00Z").await;
+        seed_row(&db, "m2", "user", "完全无关的内容", "2026-08-10T00:00:01Z").await;
+
+        let result = search_session_messages(&db, SESSION, &terms(&["上下文"]), 1000, 1_000_000)
+            .await
+            .expect("search");
+        assert_eq!(result.match_count, 1, "中文子串应命中（LIKE 天然支持，无需分词）");
+        assert_eq!(result.hits[0].id, "m1");
+        assert!(result.hits[0].snippet.contains("上下文"), "片段应含命中词");
+        assert!(!result.truncated);
+        assert!(!result.terms_truncated);
+    }
+
+    #[tokio::test]
+    async fn search_multiple_terms_use_and_semantics() {
+        let db = fresh_db().await;
+        seed_row(&db, "m1", "assistant", "alpha beta", "2026-08-10T00:00:00Z").await;
+        seed_row(&db, "m2", "assistant", "alpha gamma", "2026-08-10T00:00:01Z").await;
+
+        let result =
+            search_session_messages(&db, SESSION, &terms(&["alpha", "beta"]), 1000, 1_000_000)
+                .await
+                .expect("search");
+        assert_eq!(result.match_count, 1, "多词应为 AND 语义（每个词都要在同一行出现）");
+        assert_eq!(result.hits[0].id, "m1");
+    }
+
+    #[tokio::test]
+    async fn search_escapes_like_wildcards() {
+        let db = fresh_db().await;
+        seed_row(&db, "m1", "assistant", "完成 100%", "2026-08-10T00:00:00Z").await;
+        seed_row(&db, "m2", "assistant", "完成 100 分", "2026-08-10T00:00:01Z").await;
+        seed_row(&db, "m3", "assistant", "a_b", "2026-08-10T00:00:02Z").await;
+        seed_row(&db, "m4", "assistant", "axb", "2026-08-10T00:00:03Z").await;
+
+        let pct = search_session_messages(&db, SESSION, &terms(&["100%"]), 1000, 1_000_000)
+            .await
+            .expect("search");
+        assert_eq!(pct.match_count, 1, "`%` 必须当字面量匹配，不能变成通配符");
+        assert_eq!(pct.hits[0].id, "m1");
+
+        let under = search_session_messages(&db, SESSION, &terms(&["a_b"]), 1000, 1_000_000)
+            .await
+            .expect("search");
+        assert_eq!(under.match_count, 1, "`_` 必须当字面量匹配");
+        assert_eq!(under.hits[0].id, "m3");
+    }
+
+    #[tokio::test]
+    async fn search_excludes_system_rows() {
+        let db = fresh_db().await;
+        seed_row(&db, "m1", "system", "权限回收告知", "2026-08-10T00:00:00Z").await;
+        seed_row(&db, "m2", "assistant", "权限回收告知", "2026-08-10T00:00:01Z").await;
+
+        let result = search_session_messages(&db, SESSION, &terms(&["权限回收"]), 1000, 1_000_000)
+            .await
+            .expect("search");
+        assert_eq!(result.match_count, 1, "system 行是宿主内部事件，不该进搜索结果");
+        assert_eq!(result.hits[0].id, "m2");
+    }
+
+    #[tokio::test]
+    async fn search_reports_row_budget_truncation() {
+        let db = fresh_db().await;
+        for i in 0..5 {
+            seed_row(
+                &db,
+                &format!("m{i}"),
+                "assistant",
+                "关键词",
+                &format!("2026-08-10T00:00:0{i}Z"),
+            )
+            .await;
+        }
+        // 预算只允许扫 2 行 → 更早的行没参与检索，必须显式上报 truncated。
+        let result = search_session_messages(&db, SESSION, &terms(&["关键词"]), 2, 1_000_000)
+            .await
+            .expect("search");
+        assert!(result.truncated, "行数预算触顶必须显式标注（不能静默漏）");
+        assert_eq!(result.scanned_rows, 2);
+        assert_eq!(result.match_count, 2, "只应返回参与检索的行");
+    }
+
+    #[tokio::test]
+    async fn search_reports_byte_budget_truncation() {
+        let db = fresh_db().await;
+        // 每行 ≈103 字节；预算 250 → 只能纳入 2 行（第三行会超）。
+        let filler = "x".repeat(100);
+        for i in 0..4 {
+            seed_row(
+                &db,
+                &format!("m{i}"),
+                "assistant",
+                &format!("关键词{filler}"),
+                &format!("2026-08-10T00:00:0{i}Z"),
+            )
+            .await;
+        }
+        let result = search_session_messages(&db, SESSION, &terms(&["关键词"]), 1000, 250)
+            .await
+            .expect("search");
+        assert!(result.truncated, "字节预算触顶必须显式标注");
+        assert_eq!(result.scanned_rows, 2, "只应纳入预算内的行");
+        assert!(result.scanned_bytes <= 250);
+    }
+
+    #[tokio::test]
+    async fn search_caps_term_count_and_reports_it() {
+        let db = fresh_db().await;
+        // 含前 8 个词、不含第 9 个词的一行：若实现错误地保留了全部 9 个词，这行不会命中。
+        seed_row(&db, "m1", "assistant", "a b c d e f g h", "2026-08-10T00:00:00Z").await;
+        let many = terms(&["a", "b", "c", "d", "e", "f", "g", "h", "i"]);
+        let result =
+            search_session_messages(&db, SESSION, &many, 1000, 1_000_000).await.expect("search");
+        assert!(result.terms_truncated, "超词数上限必须如实上报");
+        assert_eq!(result.match_count, 1, "被丢弃的词不该参与匹配");
+    }
+
+    #[tokio::test]
+    async fn search_hit_carries_parsable_location_cursor() {
+        let db = fresh_db().await;
+        seed_row(&db, "m1", "assistant", "命中内容", "2026-08-10T00:00:00Z").await;
+        let result = search_session_messages(&db, SESSION, &terms(&["命中"]), 1000, 1_000_000)
+            .await
+            .expect("search");
+        let cursor = MessageCursor::parse(&result.hits[0].cursor).expect("cursor 可解析");
+        assert_eq!(cursor.id, "m1");
+        assert_eq!(cursor.created_at, "2026-08-10T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn location_page_contains_target_row_as_newest() {
+        let db = fresh_db().await;
+        for i in 0..5 {
+            seed_row(
+                &db,
+                &format!("m{i}"),
+                "assistant",
+                &format!("消息{i}"),
+                &format!("2026-08-10T00:00:0{i}Z"),
+            )
+            .await;
+        }
+        let at = MessageCursor { created_at: "2026-08-10T00:00:02Z".into(), id: "m2".into() };
+        // 页大小 2：目标行 + 更早的一行；再往前还有 m0 → 给游标让前端继续上翻。
+        let page = list_messages_page_at(&db, SESSION, &at, 2, 1_000_000).await.expect("page");
+        // 目标行是页内最新的一行（oldest-first 输出）。
+        let ids: Vec<&str> = page.rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["m1", "m2"]);
+        assert_eq!(
+            page.next_cursor.map(|c| c.id),
+            Some("m1".to_string()),
+            "next cursor 指向本页最旧行（上翻从这里接上）"
+        );
+    }
+
+    #[tokio::test]
+    async fn location_page_at_oldest_row_has_no_cursor() {
+        let db = fresh_db().await;
+        seed_row(&db, "m0", "assistant", "最老", "2026-08-10T00:00:00Z").await;
+        seed_row(&db, "m1", "assistant", "更新", "2026-08-10T00:00:01Z").await;
+        let at = MessageCursor { created_at: "2026-08-10T00:00:00Z".into(), id: "m0".into() };
+        let page = list_messages_page_at(&db, SESSION, &at, 10, 1_000_000).await.expect("page");
+        assert_eq!(page.rows.len(), 1);
+        assert!(page.next_cursor.is_none(), "已到历史开头时不得给游标");
     }
 
     #[test]
