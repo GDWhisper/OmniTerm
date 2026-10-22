@@ -87,7 +87,7 @@ obsidian-agent-client 限的不是单条消息、也不是每页，而是**保�
 
 claudecodeui 在「跳转到搜索命中的历史消息」时不得不 `limit: null` 全量加载并 `setVisibleMessageCount(Infinity)`，还硬编码 `setTimeout(300)` 等渲染完成（`useChatSessionState.ts:636-650`）。我们将来做历史搜索会撞上同一个问题——**搜索要么在服务端做（返回命中位置的游标，然后定向翻页），要么被迫全量加载**。前者是正确方向，记在这里以免届时重新踩。
 
-> **2026-10-21 已走前者**（F06，计划 `docs/dev/plans/2026-10-21-acp-chat-fulltext-search.md`）：服务端检索 `GET /sessions/{id}/messages/search`（LIKE + 双扫描预算）返回命中项与**定位游标**，前端按游标请求「定位页」`GET /sessions/{id}/messages?at=<cursor>` 定向取一页并把窗口整体替换过去——全程不触发全量加载。代价与处理见该计划 §0.2-4（替换后更新的消息不在窗口内，故标题栏给「回到最新消息」出口）。
+> **2026-10-21 已走前者**（F06，计划 `docs/dev/plans/archive/2026-10-21-acp-chat-fulltext-search.md`）：服务端检索 `GET /sessions/{id}/messages/search`（LIKE + 双扫描预算）返回命中项与**定位游标**，前端按游标请求「定位页」`GET /sessions/{id}/messages?at=<cursor>` 定向取一页并把窗口整体替换过去——全程不触发全量加载。代价与处理见该计划 §0.2-4（替换后更新的消息不在窗口内，故标题栏给「回到最新消息」出口）。
 
 ## 三个项目一致的一件事：截断必须明示
 
