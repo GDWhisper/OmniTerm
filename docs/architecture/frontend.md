@@ -223,6 +223,7 @@ tmux 与 pty 会话共用 Terminal 组件与 WS 路由，但交互语义按引�
   `scrollMode`（MobileKeyBar 高亮 + 软键盘抑制复用）由控制器的
   viewport 模式启停回调驱动（`y > 0` 即滚动中）；modern 键位拦截直接
   放行；鼠标上报模式经 cell_frame `mouse_mode`/`mouse_encoding` 中继同步 xterm 解析态（2026-09-23，同步生效后上述「鼠标协议激活」放行分支即生效、wheel 走 xterm 鼠标上报），TUI 未开启鼠标上报时直接拖选即复制（autoCopySelect 机制共用）。
+- **右键拦截（两引擎共用，2026-10-22）**：鼠标上报激活时（`term.modes.mouseTrackingMode !== 'none'`；pty 经 cell_frame 中继、tmux 由原始输出解析）xterm 已把右键作为 button 2 上报给 PTY，浏览器原生菜单若同时弹出会抢走 TUI 交互。终端容器在 capture 阶段 `preventDefault` + `stopPropagation` 拦截 `contextmenu`；Shift+右键在 xterm 中强制选择、不上报鼠标，故保留为使用原生菜单的逃生口；mouse mode 为 none 的普通 shell 不拦截（复制/粘贴菜单照常）。
 - 引擎间切换会话时 `Layout::sessionViewKey` 以 runtime_kind 为 key，
   跨引擎切换强制重挂载（pty 的 onScroll 订阅在创建期注册）。
 
