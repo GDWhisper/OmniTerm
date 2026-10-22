@@ -1,6 +1,6 @@
 # ACP 会话可靠性加固：存储限界与数据正确性
 
-> 状态：Phase 0 / Phase 1 / Phase 2 已实施（2026-08-11 起，提交 `2d18fa1` 起）；Phase 3-4 待办
+> 状态：Phase 0 / Phase 1 / Phase 2 已实施（2026-08-11 起，提交 `2d18fa1` 起）；Phase 3 / Phase 4 已排期（2026-10-22，见各自章节），P3 无阻塞可实施、P4 待维护者拍板 Q1/Q2
 > 触发条件：修改 `src/acp/turn_accumulator.rs`、`src/acp/chat_persistence.rs`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatView.tsx` 中任一项前必读
 > 关联：`docs/reference/chat-history-loading-comparison.md`（三方参考实现对比与实测数据）、`docs/dev/performance-and-safety.md` §P1/§P2/§P5、`docs/architecture/backend.md`（blocks 两态）、`docs/dev/plans/archive/2026-07-28-pty-engine-implementation.md`
 > 前置认识：**样本量不能当作"极端情况罕见"的证据**。本项目开发库会话数少，是因为维护者不信任 ACP 会话而习惯改用终端——这是不可靠导致的结果，不是"不需要加固"的理由。实测那条 9,150,950 字符的巨行出现在一个**仅 19 条消息**的会话里。
@@ -92,6 +92,18 @@
 
 **淘汰做什么（重要）**：借鉴 obsidian-agent-client 的"淘汰只删索引，正文留作归档"（`session-storage.ts:71`）——**不删除 `sessions` 行本身**。倾向做法：只清理超限会话的 `chat_messages.blocks`（结构化内容，体积大头）而保留 `text`，或仅标记为归档态而不参与默认列表。**具体语义留待实施时与维护者确认**，因为它涉及用户可见的数据消失。
 
+> **2026-10-22 勘误 — D5 的「淘汰做什么」已被既有机制取代，倾向方案中的两支被否决**
+>
+> - **「只清 blocks」被否决**：blocks 是工具调用 / 思考 / 计划的**唯一**结构化载体，text 只是纯文本兜底。
+>   清 blocks = 内容**不可恢复地损坏**（用户看不到工具调用过程），比「会话从列表消失」严重一个量级。
+> - **「标记为归档态」已是既有功能**：D5 写于 2026-08-10，当时尚无归档机制；现在 `sessions.archived_at`
+>   （migration `20260823`）+ `idx_sessions_archived_at` + `POST /sessions/{id}/archive` +
+>   `GET /sessions/archived` + 前端 `ArchivedSessionsSection`（可展开 / 取消归档 / 删除）全部就位，
+>   语义恰好是「移出活跃列表 + 正文原样保留」。
+> - **结论**：P4 淘汰动作复用 `archived_at`（详见 Phase 4 的 D8），D5 的「需维护者确认」阻塞点**降级为已解决**；
+>   剩余待拍板项收敛为「上限值」与「触发时机」两点（Phase 4 的 D9）。
+> - **D5 的「淘汰轴 = created_at」不变**：读轴是 `ORDER BY created_at DESC`，仍无 `updated_at`，仍不需要 migration。
+
 ## 多实现差异（AGENTS.md §8）
 
 | 项 | 差异事实 | 兜底要求 |
@@ -149,19 +161,151 @@
 
 ### Phase 3（P3）— 触顶滞后锁 + 视口比例阈值
 
-| 项 | 内容 |
-|---|---|
-| 改动 | `frontend/src/components/Chat/ChatView.tsx`：`handleScroll` 与 `loadOlderHistory`（含 `TOP_LOAD_THRESHOLD_PX`、`prependAnchorRef` 一带） |
-| 测试 | 前端单测覆盖：停在顶部时不连续触发第二次加载；离开顶部再回来可再次触发 |
-| 验收 | 手动回归：长历史会话滚到顶只加载一页，滚开再回来才加载下一页；阅读位置不跳动 |
+> **2026-10-22 排期补充**：本 Phase 从「三行表格」扩写为可实施方案。实施前先读本节全部内容。
 
-### Phase 4（P4）— 会话数上限
+#### 取证（2026-10-22，代码现状）
 
-| 项 | 内容 |
+| 位置 | 现状 |
 |---|---|
-| 改动 | 会话创建路径 + `src/api/sessions.rs`；常量命名上限；淘汰按 `created_at` |
-| 阻塞点 | **淘汰语义需先与维护者确认**（见 D5：不删 `sessions` 行，倾向只清 `blocks` 或标记归档）——涉及用户可见数据消失，不得自行决定 |
-| 验收 | 单测：超限时淘汰的是 `created_at` 最早的；淘汰后 `sessions` 行仍存在（若采纳归档语义） |
+| `frontend/src/components/Chat/ChatView.tsx:35` | `const TOP_LOAD_THRESHOLD_PX = 200` —— 固定像素，同时充当**触发窗口**与**可滚动余量**两个角色 |
+| `ChatView.tsx:560-563` | `const scrollable = el.scrollHeight > el.clientHeight + TOP_LOAD_THRESHOLD_PX`；`if (scrollable && el.scrollTop < TOP_LOAD_THRESHOLD_PX) void loadOlderHistory()` |
+| `ChatView.tsx:388-413` | `loadOlderHistory`：`cursor` 为空（已到开头）或 `loadingHistory` 为真则早退；无滞后锁 |
+| `ChatView.tsx:415-426` | **前插补偿**：`useLayoutEffect` 里 `el.scrollTop += delta` 把视口位置补回去 |
+| `frontend/src/stores/chatStore.ts:1367/1379` | `loadingHistory` 仅防**请求在飞**重入，请求落定即置 false |
+
+**连锁翻页的确切路径**（不是推测，逐环节可核对）：
+
+1. 用户滚到顶 → `scrollTop ≈ 0 < 200` → 触发 `loadOlderHistory`；
+2. 前插 N 条更早消息 → `prependMessages` → 布局落定 → 补偿 `scrollTop += delta`；
+3. 补偿后 `scrollTop = delta`。**若该页增量 delta < 200**（一页只含少量短消息即如此），
+   补偿本身引发的 scroll 事件仍满足 `scrollTop < 200` → 再次 `loadOlderHistory` → 回到第 2 步，
+   连锁直到 `historyCursor` 耗尽。`loadingHistory` 挡不住（它只管在飞请求，不管落定后的下一次）。
+
+**与参考实现的关键差异（本项目独有，参考实现直接抄会失效）**：前插补偿把 `scrollTop` **抬高**了 delta。
+claudecodeui 的解锁判据是绝对位置 `scrollTop > 20`——在本项目，补偿刚做完就把用户推离绝对顶部，
+任何基于绝对 `scrollTop` 的「是否已离开顶部」判据都会被补偿位移污染，锁会被立即误解锁、连锁复现。
+
+#### D6：滞后锁的解锁信号 = 「用户向上滚动」，不用绝对位置
+
+**决策**：维护两个 per-会话 ref——上次 `scrollTop` 快照与锁标记。触顶加载发出时置锁；
+仅当**用户手势（wheel / touchmove）发生后**且 `scrollTop` 相对上次快照**减小**时解锁。
+
+- **理由**：向上滚动是**意图**信号，方向与补偿相反，补偿无法伪造它；而绝对位置会被补偿污染。
+- **否决项**：
+  - *绝对位置解锁*（claudecodeui `scrollTop > 20`）：补偿抬位 → 锁被立即误解锁 → 连锁复现（同上）。
+  - *纯时间窗*（如 500ms 内不重试）：用户停在顶部时 scroll 事件持续（贴底、内容增长），
+    窗口一过仍会连发；且需额外定时器与清理。
+- **翻盘条件**：若将来前插改为「不补偿」（接受视口跳动），可退回绝对位置判据。
+
+#### D7：触发窗口改视口比例，且与「可滚动余量」判定解耦
+
+- **触发窗口**（距顶多近算触顶）：`clientHeight * TOP_LOAD_NEAR_TOP_VIEWPORTS`，取 **1.5**
+  （openchamber `HISTORY_PREPEND_NEAR_TOP_VIEWPORTS` 口径）。这是**预取窗口**，比现行 200px 宽 →
+  用户上翻时更早开始加载，减少「看到空白」。大屏小字号下 200px 过近、手机上过远，是 D4 的原判断。
+- **「内容确实溢出」判定**：改为 `scrollHeight > clientHeight + 32`（小绝对余量，防 1px 溢出抖动）。
+  现行 `+200px` 余量是为压制连锁而设；连锁已由 D6 的滞后锁接管，该余量不再承担该职责。
+- **为何必须解耦**：若把 1.5 视口同时用作余量，内容需高出视口 1.5 倍才允许加载，
+  **短会话将完全无法上拉加载更早历史**——这是功能回退，不是保守。
+- **否决项**：保留 200px 固定窗口（openchamber 已实证视口比例更贴合）。
+- **翻盘条件**：移动端实测出现前插跳飞时，按 D4 原文引入 openchamber 的
+  「惯性滚动期间推迟前插落地」（`HISTORY_PREPEND_QUIET_MS=160` / `MAX_HOLD_MS=1500`）。
+
+#### 实施分期
+
+| 批次 | 内容 | 依赖 |
+|---|---|---|
+| 3a | 常量与判定解耦：`TOP_LOAD_THRESHOLD_PX` → `TOP_LOAD_NEAR_TOP_VIEWPORTS = 1.5`；溢出判定改小余量 | 无 |
+| 3b | 滞后锁：快照 ref + 锁 ref（会话切换时重置）；解锁 = 手势后 `scrollTop` 减小 | 3a |
+| 3c | 回归：既有 `ChatView.*.test.tsx` 全绿 + 手动回归长历史会话 | 3b |
+
+#### 测试要求（前端 vitest；jsdom 无布局，沿用 `ChatView.testUtils` 的 `mockScrollMetrics` / `fireScroll`）
+
+新建 `frontend/src/components/Chat/ChatView.topload.test.tsx`，至少 4 条：
+
+1. **连锁回归**：触顶触发一次加载 → 补偿引发的 scroll 事件**不再**触发第二次加载（D6 的核心防线）。
+2. **解锁可用**：用户手势 + 向上滚动后再次触顶，可再加载一页。
+3. **比例换算**：`clientHeight = 600` → 触发窗口 900px（不是 200px）。
+4. **会话切换**：切换会话后锁与快照重置（新会话首次触顶即可加载）。
+
+#### 风险
+
+| 风险 | 缓解 |
+|---|---|
+| 锁「锁死」：快照被补偿抬高，用户需滚更多才解锁 → 感知为上翻变慢 | 解锁判据要求**先有用户手势**（复用既有 `lastGestureAtRef` 手势时间戳），纯程序位移不解锁 |
+| 窗口放大到 1.5 视口 → 请求量上升 | 滞后锁 + 既有 `loadingHistory` 双层防抖 |
+| 与既有 `autoStick` / 贴底逻辑的交互 | 3c 回归必须覆盖「流式输出期间触顶」场景 |
+
+### Phase 4（P4）— 会话数上限 + 按 created_at 淘汰
+
+> **2026-10-22 排期补充**：D5 原定「不删 `sessions` 行，只清 blocks 或标记归档」的语义，
+> 经现状复核后**已被既有机制覆盖大半**（详见 D8）。本节重排 Phase 4 的实际范围。
+
+#### 取证（2026-10-22）
+
+| 事实 | 数据 / 位置 |
+|---|---|
+| `sessions` 表行数上限 | **完全不存在**。全仓 `rg "MAX_SESSIONS\|max_sessions\|session_limit"` 在 `src/` 与 `frontend/src/` 零命中（`ACP_LIST_MAX_SESSIONS=200` 是 agent 侧 `session/list` 的**翻页**上限，与本项无关） |
+| 实际规模 | 正式库 `omniterm.db`：92 会话（acp 90 + tmux 2）、8 项目、777 条 chat_messages；dev 库 12 会话 |
+| 单项目最集中 | 正式库单项目最多 51 个未归档会话 |
+| 排序轴 | `src/api/sessions.rs:47` `ORDER BY created_at DESC`（仅未归档）；`:1350` `DEFAULT_LIST_SQL` 同 |
+| **「移出活跃列表但保留正文」的机制已存在** | `sessions.archived_at` + `idx_sessions_archived_at` 索引 + `POST /sessions/{id}/archive` + `GET /sessions/archived` + 前端 `ArchivedSessionsSection`（可展开查看 / 取消归档 / 删除）。归档语义 = 释放 agent 进程 + 移出默认列表 + **chat_messages 原样保留** |
+| 归档的既有缺口 | X18（`docs/dev/plans/backlog/improvement-directions-remaining.md`）：归档会话**无保留期 / 无容量上限**，且 `list_archived_sessions` 是 `SELECT *` 全量无分页 |
+
+#### D8：淘汰语义 = 复用既有「归档」机制，不新造
+
+**原 D5 的三个候选**（只清 blocks / 只标记归档 / 不删行）：**「标记为归档态」这一支已经落地为既有功能**
+（`archived_at` 列 + 端点 + 前端区块），且它恰好满足 D5 的核心诉求——「淘汰只删索引，正文留作归档」
+（obsidian-agent-client 的做法，见 `docs/reference/chat-history-loading-comparison.md` §会话级限界）。
+
+**决策**：P4 的淘汰动作**复用 `archived_at`**，不新造「淘汰」状态、不加新列、不删 `sessions` 行、
+**不删 `chat_messages`**。因此 D5 原先的「待维护者确认」阻塞点**降级为已解决**（见 D9 的剩余分歧）。
+
+**为何不选「只清 blocks」**：清 blocks 会让被淘汰会话的**工具调用 / 思考 / 计划结构永久消失**（blocks 是
+结构化内容的唯一载体，text 只是纯文本兜底）——这是**不可恢复的内容损坏**，比「会话从列表消失」严重得多。
+而归档路径零内容损失。
+
+#### D9：淘汰触发时机 + 上限值（剩余分歧，需拍板）
+
+D5 的「淘汰轴 = created_at」**仍然成立且不动**：列表读轴是 `ORDER BY created_at DESC`（`:47`），
+淘汰轴必须与读轴一致，否则淘汰掉用户视觉上「最下面」的那个之外的对象（obsidian-agent-client 的踩坑注释：
+`a positional pop() would drop an old-inserted entry that is still in active use`）。
+`sessions` 表**没有 `updated_at`**，故仍用 `created_at`，且**不需要 migration**。
+
+待拍板的两点（**实施前必须由维护者决定，本文档不擅自决定**）：
+
+| # | 分歧 | 选项 | 影响 |
+|---|---|---|---|
+| Q1 | **上限值** | (a) 全局 N（跨项目共享一个池） / (b) 每项目 N / (c) 两者都设 | (a) 实现最简（一个 `COUNT`），但一个项目能吃满全局配额、挤掉别的项目；(b) 语义贴近「列表里看到什么」，但需按 `project_id` 分组计数 |
+| Q2 | **触发时机** | (a) 仅在**新建会话**时检查（惰性） / (b) 后台定时扫描 | (a) 零后台成本、零空闲资源占用，但库在用户不建会话时只增不减；(b) 及时，但要引入常驻定时任务 + 与 `archived_at` 保留期策略协调 |
+
+**倾向**：Q1=(b) 每项目上限 + 全局上限双保险；Q2=(a) 新建会话时惰性检查。
+理由：归档语义已存在且**用户可见可恢复**（归档区块可展开、可取消归档、可删除），
+即使上限设得偏紧，误归档的代价比「删数据」低一个量级，**不需要为了绝对安全而牺牲及时性**。
+
+#### D10：实施分期
+
+| 批次 | 内容 | 依赖 |
+|---|---|---|
+| 4a | **拍板 Q1/Q2**（维护者决策，写回本节表格） | — |
+| 4b | 后端：`src/api/sessions.rs` 新增上限常量 + 计数 + 超限时把最旧的未归档会话标记 `archived_at`（复用 `mark_archived`）。**计数与淘汰必须在同一事务/锁内**，否则并发建会话会重复标记 | 4a |
+| 4c | 后端单测：超限时归档的是 `created_at` 最早的；归档后 `sessions` 行仍存在；`chat_messages` 一条不少；未超限时不动 | 4b |
+| 4d | 归档列表分页 + 容量上限（**X18① 的解**）：`list_archived_sessions` 当前 `SELECT *` 全量返回，加条数上限（与 `MAX_COLLAPSED_ACP_SESSIONS` 同源思路：超限只截断返回 + 显式标注省略量，**不静默截断**） | 4b |
+| 4e | 前端：`ArchivedSessionsSection` 显示「归档会话数已达上限 / 仅显示最近 N 条」 | 4d |
+
+#### 与 X18 的关系
+
+P4 与 X18 缺口①**是同一件事的两半**：P4 管「**活跃**会话数有界」（超限 → 归档），
+X18① 管「**归档**会话数有界」（超限 → 归档区也要截断/清退）。**4d 一并做掉 X18①**，
+不要留下「归档区无限增长」这个新的无界点——那等于把无界从一处搬到另一处。
+
+#### 风险
+
+| 风险 | 缓解 |
+|---|---|
+| 归档是**用户可见**的状态变化（会话从侧栏消失） | 归档区块已存在且可恢复（取消归档 / 删除）；前端需在自动归档时给出 toast 说明「已归档 N 个最旧会话」——**静默归档会让用户以为会话丢了** |
+| 误归档「正在用」的会话 | 淘汰只选**未归档 + 非当前活跃**的；且 `acp_process_alive` 的会话（agent 进程仍驻留）应排除——但 `acp_process_alive` 是**查询时计算**的（`sessions.rs:88-103`，非持久列），淘汰时须经 `state.acp_supervisor.snapshot()` 判定，不能只看 DB 列 |
+| 并发建会话重复标记归档 | 计数 + 淘汰在同一锁内完成（4b） |
+| 上限设得过紧 → 用户频繁丢「最近」 | 上限值取实际规模的两个数量级以上（当前单项目峰值 51、总数 92） |
 
 ## 风险
 
