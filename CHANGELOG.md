@@ -66,6 +66,10 @@ Prefix each entry with the area it affects:
 - (2026-10-20 20:59) `[frontend]` ACP 输入框未发送的图片 / 文件附件在切换会话后不再丢失：附件草稿按会话存入有界内存缓存（8 会话 / 32 MiB LRU），切回即恢复、发送即清、刷新即清；文字草稿仍走 sessionStorage（`frontend/src/utils/chatAttachmentDraft.ts`、`frontend/src/components/Chat/ChatInput.tsx`）
 - (2026-10-20 20:59) `[frontend]` 已发送图片可点击气泡缩略图打开大图预览（Modal，Esc / 遮罩关闭）：live 消息显示原图，历史消息按落库策略显示缩略图（`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/utils/imageAttachment.ts`）
 
+### Changed
+
+- (2026-10-22 01:12) `[infra]` 升级 `rustls-webpki` 0.103.16 / `webpki-roots` 1.0.10，修复 RUSTSEC-2026-0381/0382（已泄露私钥的 emSign 中间证书签发链可能被错误接受），影响出站 HTTPS 校验（更新探测等）
+
 ## [0.3.4] - 2026-10-20
 
 ### Added
