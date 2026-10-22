@@ -51,6 +51,8 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-10-20 20:41) `[frontend]` FileManager 文件图标可拖拽到 ACP 输入框生成 `@工作区相对路径` 引用：复用 Pointer 拖拽（非 HTML5 DnD），支持多选文件；目录/工作区外/含空白或 `@` 的路径跳过并提示，按后端 8 条上限截断；拖拽期间输入框显示投放高亮（`frontend/src/components/FileManager/useFileDrag.ts`、`frontend/src/components/Chat/ChatInput.tsx`、`frontend/src/stores/chatStore.ts`）
+
 - (2026-10-21 03:07) `[frontend]` ACP 会话可导出为 Markdown 文件：侧栏会话右键/长按菜单新增「导出为 Markdown」项（仅 ACP 会话显示——终端会话没有聊天历史），点击后独立分页拉取该会话的**全部**历史（不复用界面上已加载的页——那只有首屏与用户上拉过的页，复用会产出「看起来完整、其实缺了前半段」的导出件），正文复用单条「复制为 Markdown」的序列化规则逐条拼装；导出件头部写明导出时刻、图片只有缩略图（原图不落库）、thinking 不导出与工具输出截断口径；条数与体积双上限触顶时保留最新的一段并显式标注省略量，图片按剩余预算内联 data URI 或降级为可见占位符；导出件文案跟随界面语言（会话级导出与消息级「复制为 Markdown」共用同一套本地化文案）（`frontend/src/utils/sessionMarkdown.ts`、`frontend/src/utils/sessionExport.ts`、`frontend/src/utils/markdownI18n.ts`、`frontend/src/hooks/useSessionExport.ts`、`frontend/src/components/Sidebar/SessionContextMenu.tsx`）
 
 - (2026-10-21 09:30) `[frontend]` agent 回合结束 / 出错 / 需要审批时可弹**浏览器桌面通知**（OS 级 `Notification` API），设置入口在 设置 → 通知：通知**只含会话名与事件类型，不含 agent 回复正文**（OS 通知在锁屏明文显示，正文可能含代码/路径/凭据）；触发判据为「用户是否在眼前」（非当前会话，或当前会话但标签页已隐藏——用户切去了别的应用；只按「非当前会话」判会误杀主场景，因为 ACP 的 WebSocket 按会话建立、回合事件只在用户正看着该会话时到达）；桌面通知已启用且已授权时不再叠加 OmniTerm 自己的提示音（避免双响），站内提醒（侧栏红点 + 提示音 + 标签页标题闪烁）不受影响；多标签页同时打开同一会话时只弹一条（BroadcastChannel 先声明者发）；能力与权限态在设置里如实展示——主部署形态以明文 http 访问局域网 IP 时浏览器不提供该能力，开关置灰并写明原因，权限被拒则给出「重新请求」入口，杜绝「用户以为开了、其实没生效」；开关存 localStorage（通知权限是浏览器级状态，跨设备无法共享）（`frontend/src/utils/desktopNotification.ts`、`frontend/src/components/Attention/AttentionProvider.tsx`、`frontend/src/components/Settings/DesktopNotificationSection.tsx`）
@@ -68,7 +70,6 @@ Prefix each entry with the area it affects:
 
 ### Added
 
-- (2026-10-20 20:41) `[frontend]` FileManager 文件图标可拖拽到 ACP 输入框生成 `@工作区相对路径` 引用：复用 Pointer 拖拽（非 HTML5 DnD），支持多选文件；目录/工作区外/含空白或 `@` 的路径跳过并提示，按后端 8 条上限截断；拖拽期间输入框显示投放高亮（`frontend/src/components/FileManager/useFileDrag.ts`、`frontend/src/components/Chat/ChatInput.tsx`、`frontend/src/stores/chatStore.ts`）
 - (2026-10-20 04:26) `[frontend]` `[backend]` `[api]` GIT 面板补充提交详情文件列表与 HISTORY 过滤：commit 抽屉展示该提交变更的文件（状态字母/rename 原路径/截断提示，`git show --name-status`）；历史支持单文件（文件行时钟入口 + 可清除的路径 chip）与全分支（ALL 切换）过滤，`/git/log` 新增 `path`/`all` 参数（`src/git/repo.rs`、`src/api/git.rs`、`frontend/src/components/GitPanel/{GitPanel,FileSections,GitDrawer}.tsx`）
 - (2026-10-20 03:35) `[frontend]` `[backend]` `[api]` GIT 面板支持分支对比（range diff）：CHANGES 视图的 BASE 选择器切换为只读 `base...HEAD` 文件列表（rename 显示原路径，空态/截断提示），点文件查看只读 diff；新增 `GET /git/range`，以 merge-base 校验基线并复用 256KB 截断（`src/git/repo.rs`、`frontend/src/components/GitPanel/{GitPanel,FileSections,GitDrawer}.tsx`）
 - (2026-10-20 03:35) `[frontend]` `[backend]` `[api]` GIT 面板支持 merge/rebase 与统一中断态：分支行内「合并到当前分支」「变基到…」（变基二次确认并提示历史重写）；`/git/status` 新增 `in_progress`（merge/rebase/cherry-pick/revert/am，含冲突数，兼容 worktree），面板常驻横幅提供 CONTINUE（有冲突时禁用）/ABORT（二次确认）；新增 `POST /git/merge|rebase|operation/continue|operation/abort`，continue 不拉起交互编辑器（`src/git/repo.rs`、`src/api/git.rs`、`frontend/src/components/GitPanel/OperationBanner.tsx`）
