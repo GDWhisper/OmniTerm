@@ -142,6 +142,13 @@ impl PtyEngine {
         self.inner.events.clone()
     }
 
+    /// 当前驻留的 pty 会话数（每个条目对应一个由本引擎持有的子进程）。
+    /// 重启影响预检用：这些进程会被重启中断；tmux server 是独立外部进程，
+    /// 不在计数内（见 `/system/restart-preflight`）。
+    pub fn live_session_count(&self) -> usize {
+        self.inner.sessions.lock().unwrap().len()
+    }
+
     /// 去抖落盘：每 [`FLUSH_INTERVAL`] 把有新输出的会话补屏环快照写盘。
     fn spawn_flush_task(&self) {
         let inner = Arc::clone(&self.inner);
@@ -716,6 +723,20 @@ mod tests {
 
         engine.kill_session("reconnect").await.unwrap();
         assert!(!engine.session_exists("reconnect").await);
+    }
+
+    #[tokio::test]
+    async fn live_session_count_tracks_spawn_and_kill() {
+        // 重启影响预检的数据源：map 条目 = 常驻 pty 进程，spawn/kill 必须对称
+        let engine = engine();
+        assert_eq!(engine.live_session_count(), 0);
+        let tmp = std::env::temp_dir();
+        let attach = engine.attach("impact-count", tmp.to_str().unwrap(), DEFAULT_SIZE).unwrap();
+        assert_eq!(engine.live_session_count(), 1);
+        drop(attach); // detach 不杀进程，仍应计数
+        assert_eq!(engine.live_session_count(), 1);
+        engine.kill_session("impact-count").await.unwrap();
+        assert_eq!(engine.live_session_count(), 0);
     }
 
     #[tokio::test]

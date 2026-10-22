@@ -11,6 +11,7 @@ vi.mock('../../api/client', () => ({
     versionCheck: vi.fn(),
     systemUpdate: vi.fn(),
     systemRestart: vi.fn(),
+    systemRestartPreflight: vi.fn(),
   },
   ApiError: class ApiError extends Error {
     status: number
@@ -74,6 +75,7 @@ describe('UpdateBadge 重启监测', () => {
     vi.mocked(api.systemRestart).mockResolvedValue({
       status: 'restarting',
     })
+    vi.mocked(api.systemRestartPreflight).mockResolvedValue({ pty: 0, acp: 0 })
 
     container = document.createElement('div')
     document.body.appendChild(container)
@@ -175,6 +177,45 @@ describe('UpdateBadge 重启监测', () => {
     expect(document.body.textContent).toContain('has not switched to v0.2.18')
     // 手动重启提示渲染服务端回传的忠实命令（自定义参数不丢失）
     expect(document.body.textContent).toContain('omniterm start -d -H 0.0.0.0')
+  })
+
+  it('存在活跃 pty/acp 会话时先确认：取消不重启，确认后才重启', async () => {
+    // mock 调用历史不清空会跨用例累积（vitest 未配 clearMocks），这里只看本次
+    vi.mocked(api.systemRestart).mockClear()
+    vi.mocked(api.systemRestartPreflight).mockResolvedValue({ pty: 2, acp: 1 })
+    await triggerUpdate()
+    await realTick()
+    await vi.waitFor(() => {
+      expect(
+        Array.from(document.body.querySelectorAll('button')).some(
+          (b) => b.textContent?.trim() === 'Restart Now',
+        ),
+      ).toBe(true)
+    })
+    clickButtonByText('Restart Now')
+
+    // 条件触发：出现中断提醒（含数量与「tmux 不受影响」），此时未发重启请求
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('pty: 2')
+      expect(document.body.textContent).toContain('acp: 1')
+      expect(document.body.textContent).toContain('tmux processes are unaffected')
+    })
+    expect(api.systemRestart).not.toHaveBeenCalled()
+
+    // 取消 → 回到「立即重启」，仍未发重启请求
+    clickButtonByText('Cancel')
+    await vi.waitFor(() => {
+      expect(document.body.textContent).not.toContain('tmux processes are unaffected')
+    })
+    expect(api.systemRestart).not.toHaveBeenCalled()
+
+    // 再次触发并确认 → 真正重启
+    clickButtonByText('Restart Now')
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('tmux processes are unaffected')
+    })
+    clickButtonByText('Confirm Restart')
+    await vi.waitFor(() => expect(api.systemRestart).toHaveBeenCalledTimes(1))
   })
 
   it('旧实现 health 无 version 字段 → 回退到断连→恢复触发刷新', async () => {

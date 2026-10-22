@@ -30,6 +30,7 @@ pub fn routes() -> Router<AppState> {
         .route("/system/version", get(version_check))
         .route("/system/update", post(run_update))
         .route("/system/restart", post(run_restart))
+        .route("/system/restart-preflight", get(restart_preflight))
 }
 
 #[derive(Deserialize)]
@@ -455,6 +456,19 @@ async fn npm_upgrade_and_verify(exe: &Path, expected: &Version) -> anyhow::Resul
     })
 }
 
+/// 重启影响预检：返回本次重启会中断的会话进程数量。
+///
+/// pty 会话进程由本进程持有（重启即中断）；ACP agent 子进程会在重启前被
+/// `AcpSupervisor::shutdown_all` 主动回收；tmux server 是独立外部进程，
+/// 重启不影响，故不计数。前端据此「条件触发」确认提醒：两者都为 0 时直接
+/// 重启，否则先让用户确认（文案必须写明 tmux 不受影响，避免误以为连 tmux
+/// 会话一起丢）。
+async fn restart_preflight(State(state): State<AppState>) -> Json<Value> {
+    let pty = state.engines.live_pty_session_count();
+    let acp = state.acp_supervisor.snapshot().await.len();
+    Json(json!({ "pty": pty, "acp": acp }))
+}
+
 async fn run_restart(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     // 仅 unix 分支在 spawn 的任务里移动持有此锁（防重启竞态），Windows 分支
     // 不使用——下划线命名让无锁分支不产生 unused 警告（发版 Windows job 实测）。
@@ -558,6 +572,20 @@ mod picker_tests {
         let _held = native_picker::PICK_LOCK.lock().await;
         let (status, _) = pick_directory(loopback_peer(), loopback_headers(), request()).await;
         assert_eq!(status, StatusCode::CONFLICT);
+    }
+}
+
+#[cfg(test)]
+mod restart_preflight_tests {
+    use super::*;
+    use crate::test_utils::test_state;
+
+    /// 空白实例上两个计数都为 0：前端据此跳过确认、保持一键重启。
+    #[tokio::test]
+    async fn empty_instance_reports_zero_active_sessions() {
+        let Json(body) = restart_preflight(State(test_state().await)).await;
+        assert_eq!(body["pty"].as_u64(), Some(0));
+        assert_eq!(body["acp"].as_u64(), Some(0));
     }
 }
 

@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- (2026-10-22 02:14) `[frontend]` `[backend]` `[api]` 服务重启改为**条件确认**：点击「立即重启」前先查 `GET /system/restart-preflight`，存在活跃 pty / ACP 会话进程时在升级面板内展开中断提醒（显示各自数量，并写明 tmux 进程不受影响），用户确认后才重启；无活跃会话保持一键直接重启，预检失败按「数量未知」要求确认而不是静默跳过（`src/api/system.rs`、`src/engine/pty/mod.rs`、`src/engine/mod.rs`、`frontend/src/components/Sidebar/UpdateBadge.tsx`、`frontend/src/api/client.ts`）
+
 ## [0.3.5] - 2026-10-22
 
 ### Added
