@@ -553,6 +553,7 @@ export function ChatView() {
     autoStick,
     pinToBottom,
     setAutoStick,
+    writeScrollTop,
   ])
 
   // 最近一次用户输入（已送达）：「上次输入」悬浮卡片的展示与跳转目标。undelivered
