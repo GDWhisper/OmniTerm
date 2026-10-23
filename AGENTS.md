@@ -35,7 +35,7 @@ cargo fmt --all && cargo clippy --quiet --workspace --all-targets -- -D warnings
 
 ## 核心规则
 
-1. **提交约定**：每次改动后提交；功能开发/修复用 `feat:`/`fix:`，文档/配置用 `docs:`/`chore:`。
+1. **提交约定**：每次改动后提交；功能开发/修复用 `feat:`/`fix:`，文档/配置用 `docs:`/`chore:`。**禁止在提交信息中添加 AI 工具署名**（`Co-Authored-By: Claude/Codex/...`、`Generated with ...` 等）：作者只能是 `git config` 的 user.name/user.email，`scripts/hooks/commit-msg` 会拒绝此类提交。
 2. **CHANGELOG.md 只写实质性功能改动**：开发文档改动不写；反复修改未解决的 bug、中间调试状态、已回退的改动不写。
 3. **启动开发服务只走 `./dev.sh`**：开发构建（debug / `target/` 产物）默认连 `~/.omniterm/omniterm-dev.db`，release 正式安装默认连 `~/.omniterm/omniterm.db`。手动运行 release 二进制或跨 worktree 必须显式传 `--db`（路径见 `.env.local` 的 `BRANCH_BINARY_NAME`）。
 4. **查源码**：先 `codegraph sync`；不知道代码在哪用 `codegraph_explore`，已知符号/路径用 `rg -n` + `Read`，要影响面用 `codegraph_impact`；配置/文档等非索引文件直接 Read/Grep。
