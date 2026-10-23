@@ -14,7 +14,7 @@ MSG_FILE="$1"
 [ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ] || exit 0
 
 # AI 工具/厂商标识。只匹配署名行/生成尾注，普通正文提到这些词不受影响。
-AI_PATTERN='(claude|anthropic|codex|openai|chatgpt|gpt-[0-9]|copilot|gemini|cursor|aider|devin|windsurf|cline|roo[ -]?code|opencode|sourcegraph|cody)'
+AI_PATTERN='(claude|anthropic|codex|openai|chatgpt|gpt-[0-9]|copilot|gemini|cursor|aider|devin|windsurf|cline|roo[ -]?code|opencode|sourcegraph|cody|codebuff|freebuff)'
 
 # 1) 协作者/署名类 trailer：值里出现 AI 标识即拒绝。
 HIT=$(grep -Ein "^[[:space:]]*(co-authored-by|co-author|assisted-by|generated-by|authored-by)[[:space:]]*:.*$AI_PATTERN" "$MSG_FILE" || true)
