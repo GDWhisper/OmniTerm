@@ -306,8 +306,9 @@
 移动端点不动」的分裂。
 
 **契约**（实现见 `frontend/src/components/Sidebar/Sidebar.tsx` 的拖拽段 +
-`ProjectCard.tsx` 头部接线 + `utils/projectReorder.ts` + `index.css`
-`.sidebar-project-lifted` / `.sidebar-project-drop-line`）：
+`ProjectCard.tsx` 头部接线 + `utils/projectReorder.ts` +
+`utils/edgeAutoScroll.ts` + `index.css` `.sidebar-project-lifted` /
+`.sidebar-project-drop-line`）：
 
 - **起拖不占手柄位，鼠标立即、触摸长按**：起拖区是卡片头部（收起态整卡
   即头部、展开态是标题条——收起/展开都可拖），**不做独立拖拽手柄**（常驻
@@ -316,13 +317,24 @@
   **触摸**：长按 500ms 起拖（与终端 paste 菜单 / 会话行菜单同范式）——
   手指一滑浏览器就滚列表，立即起拖会和滚动抢手势，长按是移动端排序的
   通行解法。达成即 `hapticTap()` + 卡片拽起特效作为反馈。
-- **卡片跟随指针**：起拖后每拍 pointermove 把 `translate(dx, dy) scale(1.02)`
-  **直写到行内 style**（`draggedElRef`）——pointermove 是高频事件，每拍走
-  React 重渲染会让整棵侧栏（含全部会话行）跟着抖（同聊天元信息读数直写
-  DOM、抽屉拖拽直改宽度的手法）。React 只管理 lifted class 与插入线
-  （目标变化才动）；**React 不管 transform，松手必须手动清空**，否则残留
-  偏移。因此 `.sidebar-project-lifted` 的 transition **不含 transform**——
-  跟随必须零延迟，补间会让卡片落后于指针。
+- **卡片跟随指针**：起拖时把源卡片克隆成**跟随浮层**（挂到侧栏根节点、不随
+  列表滚动；`data-drag-ghost` 标记），每拍 pointermove 把
+  `translate(dx, dy) scale(1.02)` **直写到浮层行内 style**——pointermove 是
+  高频事件，每拍走 React 重渲染会让整棵侧栏（含全部会话行）跟着抖（同聊天
+  元信息读数直写 DOM、抽屉拖拽直改宽度的手法）。源卡片留在列表里但
+  `visibility: hidden`（保留布局几何与插入点判定，松手落位不跳动）。
+  **不要在源卡片上 translate**：transform 溢出会计入滚动容器的 scrollable
+  overflow——`scrollHeight` 越拖越大，边缘自动滚动会一路滚进空白、滚动条
+  拇指随拖拽缩水。浮层脱离滚动内容后，滚动列表（滚轮/滚动条）不需要按
+  `scrollTop` 补偿就天然不脱钩。React 只管理 lifted class 与插入线（目标
+  变化才动）；**React 不管浮层 transform，松手/取消/卸载必须手动清空并移除
+  浮层、恢复源卡可见性**。因此 `.sidebar-project-lifted` 的 transition
+  **不含 transform**——跟随必须零延迟，补间会让卡片落后于指针。
+- **边缘自动滚动**：拖拽激活期间跑 rAF 循环，指针进入列表上/下 48px 触发带
+  时每帧滚动 10px（到达真实边界即停），每帧只滚动不做其他 DOM 操作；滚动
+  后重算插入点。判定收敛在 `utils/edgeAutoScroll.ts`（FileManager 拖拽共用，
+  那里是 40px/8px），不要在组件里再写一份。滚动（手动或自动）不派发
+  pointermove，另用 document 捕获阶段监听 `scroll` 重算插入点。
 - **指针事件统一路径**：头部 `pointerdown`（过滤 `button` 与头部动作
   button——按住 worktree/rename/delete 不起拖，否则卡片被拽起、按钮点击
   被拖拽语义吃掉）→ window 级 `pointermove`/`pointerup`/
@@ -333,17 +345,18 @@
 - **等待窗内的移动 = 取消**（触摸 >10px / 鼠标未到 4px 阈值）：那是滚动或
   普通点击拖动，不进拽起态。`pointercancel`（触摸滚动接管）同样收尾。
 - **状态分两份**：渲染态 `useState`（拽起源 + 插入点，驱动拽起特效与指示
-  线），事件态 `useRef`（window 处理器直读，避开陈旧闭包）+ 拽起卡的 DOM
-  引用（跟随 transform 直写）。同一个目标重复 move 不 `setState`（指针移动
-  是高频率事件）。长按计时器句柄驻事件态，松手/取消/竞态
-  （`projDragRef.current !== st`）三重防线防松手后引爆。
+  线），事件态 `useRef`（window 处理器直读，避开陈旧闭包）+ `dragSourceRef`
+  （隐藏的源卡）/ `dragGhostRef`（跟随浮层）两个 DOM 引用。同一个目标重复
+  move 不 `setState`（指针移动是高频率事件）。长按计时器句柄驻事件态，
+  松手/取消/竞态（`projDragRef.current !== st`）三重防线防松手后引爆。
 - **插入点 = 目标卡中点判定**：`clientY < rect.top + rect.height/2` 插前，
   否则插后；指示线是两卡之间 2px accent 硬线（负 margin 落在卡片 gap 里，
   拖拽中不引起布局跳动），`pointer-events: none` 不抢命中。
 - **拽起视觉即「in hand」语义**：`.sidebar-project-lifted` = 上浮 3px +
-  硬投影 3px→6px + accent 描边 + z-index 抬升；`pointer-events: none` 是
-  **命中判定前提**（elementFromPoint 必须穿透它命中下方卡片），不是装饰。
-  视觉规格见 ui-style-guide §7.7。
+  硬投影 3px→6px + accent 描边 + z-index 抬升（起拖时手动加在浮层上；
+  React 同时给源卡片挂同名 class，但源卡已隐藏）；浮层的
+  `pointer-events: none` 是**命中判定前提**（elementFromPoint 必须穿透它
+  命中下方卡片），不是装饰。视觉规格见 ui-style-guide §7.7。
 - **顺序计算是纯函数**（`utils/projectReorder.ts` 的 `computeProjectReorder`）：
   本地重排、落盘载荷（全量 id 列表）、失败回滚共用一次计算结果，渲染序与
   持久序不可能漂移；目标消失/拖回原位返回原序，调用方按 no-op 处理。

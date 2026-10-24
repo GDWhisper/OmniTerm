@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
+import { autoScrollNearEdge } from '../../utils/edgeAutoScroll'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
 
@@ -39,6 +40,10 @@ const CODE_EXTS = new Set(['.ts', '.tsx', '.rs', '.js', '.py', '.go', '.c', '.h'
 
 /** 松手后抑制一次合成 click，防止触摸/浏览器把落点上的按钮（如 Send）当成点击。 */
 const DRAG_CLICK_SUPPRESS_MS = 350
+
+/** 拖到表格上/下边缘时的自动滚动触发带与每帧步长（px）。 */
+const FM_DRAG_EDGE_SCROLL_PX = 40
+const FM_DRAG_EDGE_SCROLL_STEP_PX = 8
 
 /** 指针下方元素栈（优先 elementsFromPoint，jsdom 等环境回退 elementFromPoint）。 */
 function elementsUnderPointer(x: number, y: number): Element[] {
@@ -136,11 +141,10 @@ export function useFileDrag(opts: UseFileDragOptions) {
     // 真实滚动元素是内层 .fm-table-scroll；tableWrapRef 只用于宽度测量
     const container = optsRef.current.scrollRef?.current ?? tableWrapRef.current
     if (!container) return
-    const rect = container.getBoundingClientRect()
-    const EDGE = 40
-    const SPEED = 8
-    if (y < rect.top + EDGE) container.scrollTop -= SPEED
-    else if (y > rect.bottom - EDGE) container.scrollTop += SPEED
+    autoScrollNearEdge(container, y, {
+      edge: FM_DRAG_EDGE_SCROLL_PX,
+      step: FM_DRAG_EDGE_SCROLL_STEP_PX,
+    })
   }, [])
 
   const tick = useCallback(() => {

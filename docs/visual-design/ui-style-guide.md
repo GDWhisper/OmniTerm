@@ -577,11 +577,12 @@ assistant 气泡正文是 react-markdown 渲染，**必须自带一套排版规�
 |---|---|
 | 起拖 | **鼠标/笔**：移动超 4px 立即起拖（无长按）；**触摸**：长按 500ms（与列表滚动消歧，移动端通行范式）。起拖区 = 卡片头部，无独立手柄 |
 | 拽起 `.sidebar-project-lifted` | 硬投影由 `3px 3px 0` 放大到 `6px 6px 0 var(--pixel-shadow)`（§6 硬投影约定，不加 blur）；`border-color` 转 `--accent`；`position: relative; z-index: 2` 抬升浮出相邻卡片；`will-change: transform` |
-| 跟随指针 | 每拍 pointermove 直写行内 `transform: translate(dx, dy) scale(1.02)`——卡片跟着指针走（dx/dy 自按下点累计，抓住的点始终在指针下）；scale 1.02 是「捏在手里」的放大暗示。**class 的 transition 不含 transform**：跟随零延迟，补间会让卡片落后于指针；shadow/border 仍走 `0.1s steps(2)` 快照 |
+| 跟随指针 | 起拖时把源卡片克隆成**跟随浮层**（挂侧栏根节点，不随列表滚动；源卡 `visibility: hidden` 保留布局）。每拍 pointermove 直写浮层行内 `transform: translate(dx, dy) scale(1.02)`——卡片跟着指针走（dx/dy 自按下点累计，抓住的点始终在指针下）；scale 1.02 是「捏在手里」的放大暗示。**class 的 transition 不含 transform**：跟随零延迟，补间会让卡片落后于指针；shadow/border 仍走 `0.1s steps(2)` 快照 |
+| 拖拽中滚动 / 边缘自动滚动 | 浮层脱离滚动内容（不要在源卡上 translate——会让 transform 溢出撑大 `scrollHeight`）。滚轮/滚动条滚动时卡片固定在指针下、不脱钩；指针进入列表上/下 48px 触发带时每帧自动滚动 10px，到真实边界即停，松手/取消立即停止 |
 | 拽起的 `pointer-events: none` | **命中判定前提，不是装饰**：`elementFromPoint` 必须穿透跟随中的卡片命中下方卡片才能算插入点。副作用：光标取自下方卡片，故不设 `grabbing` 光标 |
 | 插入指示线 `.sidebar-project-drop-line` | 两卡之间 2px `--accent` 硬线（无 blur、无渐变）；`margin: -6px 10px 4px` 负边距落在卡片 10px gap 内——拖拽中不引起布局跳动；`pointer-events: none` 不抢命中；即时出现/消失（拖拽反馈零延迟，不跟补间） |
 
-**「in hand」语义**：被拽起的卡保持完全不透明（不是半透明置灰）+ 跟随指针——用户清楚地看见「哪张卡被我捏在手里、此刻在哪」；插入线回答「松手会落到哪」。松手时行内 transform 清空（React 不管该属性，须手动），卡片落定新序。
+**「in hand」语义**：被拽起的卡保持完全不透明（不是半透明置灰）+ 跟随指针——用户清楚地看见「哪张卡被我捏在手里、此刻在哪」；插入线回答「松手会落到哪」。松手时移除克隆浮层、恢复源卡可见性（React 不管浮层的 transform 与生命周期，须手动），卡片落定新序。
 
 ### 7.7.1 文件拖入 ACP 输入框（投放态）
 
