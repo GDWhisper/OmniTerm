@@ -183,6 +183,11 @@ const langLoaders: Record<string, LangLoader> = {
   php: () => import('@codemirror/lang-php').then((m) => m.php()),
 }
 
+/** 搜索输入防抖（ms）：computeMatches 是全文档同步扫描，大文件上逐键重扫会卡
+ *  输入；受控回显即时，计算延迟到停顿后（2026-10-10 计划 ④）。导航键不走 query，
+ *  不受影响。 */
+const SEARCH_INPUT_DEBOUNCE_MS = 150
+
 /** Detect language from file extension and load it on demand */
 async function getLanguageExtension(fileName: string): Promise<Extension> {
   const ext = fileName.split('.').pop()?.toLowerCase() || ''
@@ -209,6 +214,14 @@ export function FileEditor({ content, editable, fileName, onChange, onSave, sear
 
   // 搜索状态：查询串在 React（受控输入），匹配区间经 effect 同步进 CodeMirror 装饰
   const [query, setQuery] = useState('')
+  // 生效查询 = 防抖后的 query（2026-10-10 计划 ④）：computeMatches 是全文档同步
+  // 扫描（+ 1 万匹配上限），大文件上每次按键都重扫会卡输入；受控值仍即时回显，
+  // 只延迟计算。Enter/↑↓ 导航不走 query，不受防抖影响。
+  const [activeQuery, setActiveQuery] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setActiveQuery(query), SEARCH_INPUT_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [query])
   const [caseSensitive, setCaseSensitive] = useState(false)
   const [useRegex, setUseRegex] = useState(false)
   const [matches, setMatches] = useState<SearchMatch[]>([])
@@ -392,7 +405,7 @@ export function FileEditor({ content, editable, fileName, onChange, onSave, sear
     const view = viewRef.current
     if (!view) return
 
-    if (!searchOpen || query === '') {
+    if (!searchOpen || activeQuery === '') {
       view.dispatch({ effects: setSearchDecorations.of(Decoration.none) })
       scrolledIndexRef.current = -1
       setMatches([])
@@ -402,9 +415,9 @@ export function FileEditor({ content, editable, fileName, onChange, onSave, sear
       return
     }
 
-    const params = { query, caseSensitive, useRegex }
+    const params = { query: activeQuery, caseSensitive, useRegex }
     const paramsChanged =
-      lastParamsRef.current.query !== query ||
+      lastParamsRef.current.query !== activeQuery ||
       lastParamsRef.current.caseSensitive !== caseSensitive ||
       lastParamsRef.current.useRegex !== useRegex
     lastParamsRef.current = params
@@ -415,7 +428,7 @@ export function FileEditor({ content, editable, fileName, onChange, onSave, sear
     if (paramsChanged) scrolledIndexRef.current = -1
 
     const result = computeMatches(view.state.doc.toString(), {
-      query,
+      query: activeQuery,
       caseSensitive,
       regex: useRegex,
     })
@@ -448,7 +461,7 @@ export function FileEditor({ content, editable, fileName, onChange, onSave, sear
     setInvalidRegex(result.invalid)
     setTruncated(result.truncated)
     if (index !== current) setCurrent(index)
-  }, [query, caseSensitive, useRegex, searchOpen, docVersion, current])
+  }, [activeQuery, caseSensitive, useRegex, searchOpen, docVersion, current])
 
   // 上一个 / 下一个匹配（输入框的 Enter / Shift+Enter / ↓ / ↑ 与面板按钮共用）
   const goToMatch = (delta: number) => {
