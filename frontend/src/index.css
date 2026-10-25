@@ -1602,15 +1602,13 @@ body.fm-dragging * {
 }
 
 .sidebar-session-item.has-actions:hover .session-age,
-.sidebar-session-item.has-actions:focus-within .session-age,
-.sidebar-session-item.has-actions.active .session-age {
+.sidebar-session-item.has-actions:focus-within .session-age {
   width: max(var(--session-age-width), var(--session-actions-width));
   opacity: 0;
 }
 
 .sidebar-session-item.has-actions:hover .session-actions,
-.sidebar-session-item.has-actions:focus-within .session-actions,
-.sidebar-session-item.has-actions.active .session-actions {
+.sidebar-session-item.has-actions:focus-within .session-actions {
   pointer-events: auto;
 }
 
@@ -4180,8 +4178,7 @@ select optgroup option {
 .sidebar-wt-row:focus-within .sidebar-wt-add-btn,
 .sidebar-wt-row:focus-within .row-action,
 .sidebar-session-item:hover .row-action,
-.sidebar-session-item:focus-within .row-action,
-.sidebar-session-item.active .row-action {
+.sidebar-session-item:focus-within .row-action {
   opacity: 1;
 }
 /* ── Touch devices: action buttons always visible (no hover to reveal) ── */

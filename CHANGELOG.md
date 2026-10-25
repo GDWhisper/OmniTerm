@@ -55,7 +55,7 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
-- (2026-10-25 00:08) `[frontend]` 侧栏会话行 UX：过长标题改为右缘渐隐（溢出时 `mask-image`），鼠标 hover 时往返滚动以查看完整标题；行尾显示上次会话距今多久（ACP 取 `last_turn_at`，无 turn / 终端会话回退 `created_at`，文字走紧凑分档并由共享分钟级时钟刷新）。hover / 键盘聚焦 / 激活 / 触屏时时间槽扩展为动作按钮槽并淡出时间，动作按钮改为绝对定位，空闲时不再为不可见按钮预留宽度（`frontend/src/components/Sidebar/SessionRow.tsx`、`frontend/src/hooks/useMinuteNow.ts`、`frontend/src/utils/formatTime.ts`、`frontend/src/index.css`）
+- (2026-10-25 00:08) `[frontend]` 侧栏会话行 UX：过长标题改为右缘渐隐（溢出时 `mask-image`），鼠标 hover 时往返滚动以查看完整标题；行尾显示上次会话距今多久（ACP 取 `last_turn_at`，无 turn / 终端会话回退 `created_at`，文字走紧凑分档并由共享分钟级时钟刷新）。hover / 键盘聚焦 / 触屏时时间槽扩展为动作按钮槽并淡出时间（聚焦/激活行不再常显动作按钮，与普通行一致；触屏因无 hover 仍恒显），动作按钮改为绝对定位，空闲时不再为不可见按钮预留宽度（`frontend/src/components/Sidebar/SessionRow.tsx`、`frontend/src/hooks/useMinuteNow.ts`、`frontend/src/utils/formatTime.ts`、`frontend/src/index.css`）
 
 ### Fixed
 

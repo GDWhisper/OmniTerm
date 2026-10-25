@@ -543,7 +543,8 @@ Variant classes: `.toast-error` (danger border/text), `.toast-warning` (warning)
 | 时间槽 `.session-age` | 固定 44px，右对齐，12px `--text-faint`，`tabular-nums`；文案走 `relativeAgeParts`（刚刚 / N分 / N小时 / N天 / N个月 / N年） |
 | 时间来源 | `last_turn_at ?? created_at`：ACP 取最近一次 turn 定稿；从未有过 turn 或终端会话回退到创建时刻 |
 | 动作槽 `.session-actions` | **绝对定位**在时间槽上（`right:6px`，宽度 `n×20px + (n-1)×6px`），空闲不占布局；隐藏态 `pointer-events:none`，避免透明按钮拦截标题点击；`background-color: inherit` 在淡入时遮住正在淡出的时间 |
-| 让位行为 | `hover` / `focus-within` / `.active` / `pointer:coarse` 时：时间槽宽度扩到 `max(44px, 动作按钮宽度)` 并让 `.session-age` 淡出，动作按钮淡入。标题因此获得准确的可视宽度，渐隐边缘落在按钮左侧 |
+| 让位行为 | `hover` / `focus-within` / `pointer:coarse` 时：时间槽宽度扩到 `max(44px, 动作按钮宽度)` 并让 `.session-age` 淡出，动作按钮淡入。标题因此获得准确的可视宽度，渐隐边缘落在按钮左侧 |
+| 聚焦态 | `.active` **不再常显动作按钮**（2026-10-25 用户要求）：聚焦行与普通行一样由 hover / focus-within 触发，空闲时显示时间；触屏例外见下行 |
 | 触屏 | 没有 hover，动作按钮恒显，时间槽恒为按钮宽度且时间隐藏；标题仅渐隐、不滚动 |
 
 **为什么用「时间元素本身扩宽」而不是空 spacer**：时间元素本来就在 flex 流里占 44px，hover 时把它扩到按钮宽度即可让标题按 flex 规则自动让位；按钮绝对定位叠在同一槽上，空闲时不再为不可见按钮预留 72px（ACP 在线会话的标题实际多出约 28px）。按钮尺寸/间隔是行内 CSS 变量 `--session-action-size` / `--session-gap`，改动须同步 `.release-btn` / `.archived-unarchive-btn` 与删除按钮的 20px。
