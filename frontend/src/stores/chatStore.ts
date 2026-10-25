@@ -562,6 +562,32 @@ const queueStorageKey = (sessionId: string) => `${QUEUE_STORAGE_PREFIX}${session
 const ALIGN_SCAN_BUDGET = 100
 
 /**
+ * 从列表**尾部向前**的有界候选扫描：返回最后一条通过 `pred` 的元素下标，无命中或
+ * 检查数耗尽 `ALIGN_SCAN_BUDGET` 时返回 -1。
+ *
+ * 服务于 `mergeLatestMessages` 的 rule 3/4 候选匹配（user echo 去重 / assistant 前缀
+ * 对账）：与 `alignReplaySyncPayload` 的对齐扫描是**同族操作**（在基线里逐条比较文本、
+ * 命中即停、靠「从最近处开始」控制常见成本），故共用同一预算常量与同一「超限即降级」
+ * 语义——预算耗尽 = 放弃该条候选匹配，调用方走既有的 `createdAt` 顺序插入（宁添不缺
+ * 的安全路径），不中断整体合并。
+ *
+ * 全失配时它是 O(扫描宽度 × 文本长度) 的同步主线程工作，与对齐侧被同一条 §P1 红线
+ * 界住：补拉的 incoming 行数由后端分页预算界住（≤500），但每条要扫的 `merged` 是
+ * 用户上拉过 P 页后的全列表（100·P 行），无预算时两者相乘就是几十万次 `startsWith`。
+ *
+ * 不抽成 align 也调用的「共享扫描体」：对齐扫描从 cursor 向后（更旧方向）、还叠加
+ * 整场总量预算与指针提交，方向相反、维度不同，强行参数化方向是为共享而共享。
+ */
+function boundedTailScan<T>(items: readonly T[], pred: (item: T) => boolean): number {
+  let examined = 0
+  for (let i = items.length - 1; i >= 0 && examined < ALIGN_SCAN_BUDGET; i--) {
+    examined += 1
+    if (pred(items[i])) return i
+  }
+  return -1
+}
+
+/**
  * `alignReplaySyncPayload` **整场**扫描的候选检查总量上限（`MAX_ALIGN_COMPARISONS`
  * = `replay × baseline × 文本长度` 这个积里，唯一还没被界住的那一维）。
  *
@@ -1405,12 +1431,13 @@ export const useChatStore = create<ChatStore>((set, getStore) => ({
       //    所有；DB 那份是防抖中的原始帧，覆盖它既丢 live cooked 结构又与后续帧打架。
       // 2. dbId 命中 → 原位替换（DB 权威）。markDone 现已把 prompt_done 的 row_id
       //    落到消息 dbId，健康连接结束的 turn 全走这条，不靠文本猜身份。
-      // 3. 无 dbId 的候选匹配（user echo / assistant 半截消息）从尾部向前扫描最近
-      //    一条：user 要求 text 全等，assistant 要求 DB 行 text 以其为精确前缀。
-      //    命中即原位替换——位置即用户已看到的顺序，DB 行只补 dbId 与最终内容。
-      //    为什么不能只看尾部：补拉常发生在 turn 结束之后，echo 后面永远跟着
-      //    assistant（健康轮带 dbId、断连轮半截无 dbId），尾部角色永远对不上
-      //    （2026-10-07 正式版 codebuddy_1007-1314：用户气泡重复 + 顺序错乱）。
+      // 3. 无 dbId 的候选匹配（user echo / assistant 半截消息）从尾部向前做有界
+      //    扫描（宽度 = ALIGN_SCAN_BUDGET，与对齐扫描同源）：user 要求 text 全等，
+      //    assistant 要求 DB 行 text 以其为精确前缀。命中即原位替换——位置即用户
+      //    已看到的顺序，DB 行只补 dbId 与最终内容。为什么不能只看尾部：补拉常发生
+      //    在 turn 结束之后，echo 后面永远跟着 assistant（健康轮带 dbId、断连轮半截
+      //    无 dbId），尾部角色永远对不上（2026-10-07 正式版 codebuddy_1007-1314：
+      //    用户气泡重复 + 顺序错乱）。
       // 4. 其余行按 createdAt 顺序插入。本路径不回写（RAW 收敛由调用方另行处理）。
       const merged: ChatMessage[] = [...current.messages]
       let changed = false
@@ -1422,19 +1449,22 @@ export const useChatStore = create<ChatStore>((set, getStore) => ({
           changed = true
           continue
         }
-        let candIdx = -1
-        for (let i = merged.length - 1; i >= 0; i--) {
-          const c = merged[i]
-          if (c.role !== m.role || c.dbId || c.undelivered) continue
-          if (
-            m.role === 'user'
+        // 候选匹配（user echo / assistant 半截消息）从尾部向前做**有界**扫描：命中即
+        // 原位替换——位置即用户已看到的顺序，DB 行只补 dbId 与最终内容。为什么不能
+        // 只看尾部：补拉常发生在 turn 结束之后，echo 后面永远跟着 assistant（健康轮
+        // 带 dbId、断连轮半截无 dbId），尾部角色永远对不上（2026-10-07 正式版
+        // codebuddy_1007-1314：用户气泡重复 + 顺序错乱）。扫描宽度由
+        // ALIGN_SCAN_BUDGET 界住（与对齐扫描同源），耗尽即降级为 createdAt 插入。
+        const candIdx = boundedTailScan(
+          merged,
+          (c) =>
+            c.role === m.role &&
+            !c.dbId &&
+            !c.undelivered &&
+            (m.role === 'user'
               ? c.text === m.text
-              : c.text.length > 0 && m.text.startsWith(c.text)
-          ) {
-            candIdx = i
-            break
-          }
-        }
+              : c.text.length > 0 && m.text.startsWith(c.text)),
+        )
         if (candIdx >= 0) {
           merged[candIdx] = m
           changed = true

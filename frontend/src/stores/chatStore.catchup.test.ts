@@ -223,6 +223,40 @@ describe('mergeLatestMessages — 聚焦补拉的 DB 最新页合并', () => {
     expect(state().messages.map((m) => m.id)).toEqual(['u1', 'a1', 'row-u2', 'row-a2'])
   })
 
+  // ③（2026-10-10 计划）：候选匹配的尾部扫描宽度受 ALIGN_SCAN_BUDGET（=100，与
+  // alignReplaySyncPayload 的对齐扫描同源）界住。全失配 × 大列表（上拉过 P 页后
+  // merged 可达 100·P 行）的同步扫描会卡主线程；预算耗尽 = 该条放弃候选匹配、降级
+  // 为 createdAt 插入（宁添不缺的既有安全路径）。断言用行为证明预算生效，不探内部
+  // 计数器——与 alignreplay 预算用例同一手法。
+  it('候选扫描宽度有界：预算之外的 echo 即使全等也降级为插入', () => {
+    // echo 在 100 条失配噪声**之前**（从尾向前第 101 位）：预算耗尽，看不到它。
+    const far = Array.from({ length: 100 }, (_, i) =>
+      mk({ id: `noise-far-${i}`, role: 'user', text: `noise ${i}`, createdAt: 1000 + i }),
+    )
+    seed([mk({ id: 'echo-u', role: 'user', text: 'q', createdAt: 5 }), ...far])
+    useChatStore.getState().mergeLatestMessages('s1', [
+      row('row-u', 'user', 'q', { createdAt: 5000 }),
+    ])
+    const after = state().messages
+    expect(after.map((m) => m.id)).toEqual(['echo-u', ...far.map((m) => m.id), 'row-u'])
+    // echo 未被替换（dbId 仍空）、row-u 按 createdAt 插到尾部 = 降级路径。
+    expect(after[0].dbId).toBeUndefined()
+
+    // 对照：噪声只有 99 条（echo 在预算内第 100 位）→ 照常原位替换。
+    useChatStore.setState({ states: {} })
+    const near = Array.from({ length: 99 }, (_, i) =>
+      mk({ id: `noise-near-${i}`, role: 'user', text: `noise ${i}`, createdAt: 1000 + i }),
+    )
+    seed([mk({ id: 'echo-u2', role: 'user', text: 'q', createdAt: 5 }), ...near])
+    useChatStore.getState().mergeLatestMessages('s1', [
+      row('row-u2', 'user', 'q', { createdAt: 5000 }),
+    ])
+    const msgs2 = state().messages
+    // 原位替换：echo 槽位被 DB 行占据（id 随之变为行 id），总数不变。
+    expect(msgs2[0].id).toBe('row-u2')
+    expect(msgs2).toHaveLength(100)
+  })
+
   it('assistant 行已内联 SYSTEM 告知时，去掉 live 独立消息与同 noticeId 的 DB system 行', () => {
     const noticeBlocks = (id: string): ContentBlock[] => [
       { type: 'system', label: 'system.permTimeout.auto', noticeId: id },
