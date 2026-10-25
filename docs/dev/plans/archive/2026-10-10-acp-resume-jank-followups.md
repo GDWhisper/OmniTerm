@@ -1,6 +1,6 @@
 # 离开浏览器后「假死」残余项：可见反馈与错峰
 
-> 状态：**P1（①②③）与 P2 小项（④⑨）已实施**（2026-10-25，实施记录见文末）；⑤⑥⑦⑧ 未实施（见文末「未实施项」）
+> 状态：**已实施并归档**（①-④⑨ 于 2026-10-25 落地，实施记录与实施偏差见文末）。未实施的 ⑤⑧ 已移交 `docs/dev/plans/backlog/improvement-directions-remaining.md`（X19/X20）；⑥⑦ 属 `docs/dev/plans/2026-09-19-ws-idle-disconnect-heartbeat.md`（仍存活，其「终端侧未接线 / Phase 0 探针未跑」即本计划 ⑥⑦）
 > 触发条件：改 `useAcpChat.sendPrompt` 的失败路径、`ChatView` 聚焦补拉的触发时机、`chatStore.mergeLatestMessages` 的扫描预算、`FileEditor` 内建搜索、侧栏/健康检查轮询矩阵，或推进终端 WS 侧心跳前**必读**
 > 关联：`docs/dev/plans/2026-09-19-ws-idle-disconnect-heartbeat.md`（Phase 1 已部分落地，文末勘误）、`docs/dev/plans/2026-10-01-acp-refocus-latest-merge.md`（10-10 勘误）、`docs/dev/performance-and-safety.md` §P1/§S2、`docs/architecture/frontend.md`
 
@@ -150,6 +150,6 @@
 2. **③ 共享的是常量与降级语义，不共享函数体**。`alignReplaySyncPayload` 的扫描从 cursor **向后**且叠加整场总量预算（`MAX_ALIGN_COMPARISONS`）与指针提交；`mergeLatestMessages` 的候选扫描从尾部**向前**。方向相反、维度不同，强行参数化方向是为共享而共享（工程准则 7 反例），故只抽 `boundedTailScan` 服务合并侧，两者以 `ALIGN_SCAN_BUDGET` 同源 + 「超限即降级为既有安全路径」同族语义对齐。验收标准「共用同一预算常量」逐字满足。
 3. **⑨a 的超限策略是丢最旧 + 置 `needsCatchUp`，不是 liveBuffer 的「越界即 flush」**。hydrate 未落定前应用帧 = hydrate 因 messages 非空 bail = 丢整段历史，本结构下不存在「提前消费」这个选项；被丢帧内容后端累积器 ≤1s 已落库，聚焦补拉从 DB 幂等找回（显式找回路径，非静默丢弃）。
 
-### 未实施项（后续排期）
+### 未实施项（2026-10-25 归档时移交）
 
-⑤ 轮询矩阵收敛、⑥ 终端 WS 侧心跳、⑦ Phase 0 四格探针（需公网环境）、⑧ WS 集成测试脚手架——工程量中到大或需外部环境，本轮不动；各自触发条件与验收标准仍以本文件为准。
+⑤ 轮询矩阵收敛、⑧ WS 集成测试脚手架——已移交 `docs/dev/plans/backlog/improvement-directions-remaining.md`（X19 / X20），后续排期以 backlog 行为准；⑥ 终端 WS 侧心跳、⑦ Phase 0 四格探针——属心跳计划 `2026-09-19-ws-idle-disconnect-heartbeat.md` 的 D3 另一半与 Phase 0（该计划仍存活，头部「终端侧未接线 / Phase 0 探针未跑」即此两项）。
