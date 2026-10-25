@@ -358,6 +358,8 @@
   "chat.input.atNoResults": "没有匹配的文件",
   "chat.input.atDropSkipped": "{{count}} 个文件未能添加引用（仅支持工作区内的文件）",
   "chat.input.message.undelivered": "未送达——连接已断开",
+  "chat.sendFail.disconnected": "连接已断开，消息未发送",
+  "chat.sendFail.reconnecting": "正在重连，稍候重发",
   "chat.msg.expand": "展开",
   "chat.msg.collapse": "收起",
   "chat.msg.openFile": "在文件管理器中打开",

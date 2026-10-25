@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useChatStore, messagesToSyncPayload, turnToSyncPayload, storedRawRowToSyncPayload, buildReplayMessages, alignReplaySyncPayload, type PlanEntry, type ConfigOption, type SlashCommand, type SessionUpdateAction, type PendingPermission, type ContentBlock, type SyncMessagePayload, type SystemBlockDetail, type ChatMessage } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
@@ -702,6 +703,7 @@ export function decodeStoredBlocks(raw: string, fullText?: string): ContentBlock
 // --- Hook ---
 
 export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
+  const { t } = useTranslation()
   const [connectionState, setConnectionState] = useState<AcpConnectionState>('disconnected')
   const wsRef = useRef<WebSocket | null>(null)
   const sessionIdRef = useRef<string | null>(null)
@@ -1602,8 +1604,23 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     const hasImages = !!images && images.length > 0
     const hasFiles = !!files && files.length > 0
     // 纯附件消息（无文字）合法：粘贴截图 / 只发一个文件直接发送。
-    if (!ws || ws.readyState !== WebSocket.OPEN || !sid || (!trimmed && !hasImages && !hasFiles))
+    // 空输入是正常的用户输入守卫，静默返回（2026-10-10 计划 ①：不是失败）。
+    // !sid 同理静默：无会话上下文时无处展示错误，也与「连接失败」不同类。
+    if ((!trimmed && !hasImages && !hasFiles) || !sid) return
+    // socket 不可用 = 失败，必须留下可见痕迹（2026-10-10 计划 ①）：旧行为静默
+    // return，用户侧「能打字、回车毫无反应」，与假死完全同形。落 store error
+    // （错误条渲染路径），不插用户气泡（历史里不该出现从未发出的消息）、不 toast
+    // （与既有断连留痕重复打扰）。文案分档读 connectionState：connecting 态提示
+    // 重连中而非「未发送」，避免误报失败。
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      useChatStore.getState().setError(
+        sid,
+        connectionState === 'connecting'
+          ? t('chat.sendFail.reconnecting')
+          : t('chat.sendFail.disconnected'),
+      )
       return
+    }
     // 恢复/重放尚未结束：此时发送的 prompt 会与 load_session 竞态，后端可能把它
     // 交给未就绪的 agent 并落出空 assistant 行。输入框已禁用，这里兜底直连/竞态。
     if (isReplaying.current) return
@@ -1650,7 +1667,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       // send 失败（底层缓冲满 / 连接已坏）：不乐观置 sending，直接报错
       s.markError(sid, 'Failed to send message — connection unavailable')
     }
-  }, [attention])
+  }, [attention, connectionState, t])
 
   const cancel = useCallback(() => {
     const ws = wsRef.current

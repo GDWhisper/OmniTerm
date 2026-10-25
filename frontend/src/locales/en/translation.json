@@ -358,6 +358,8 @@
   "chat.input.atNoResults": "No matching files",
   "chat.input.atDropSkipped": "{{count}} item(s) were not added as references (only files inside the workspace are supported).",
   "chat.input.message.undelivered": "not delivered — connection lost",
+  "chat.sendFail.disconnected": "Connection lost — message not sent",
+  "chat.sendFail.reconnecting": "Reconnecting — send again in a moment",
   "chat.msg.expand": "expand",
   "chat.msg.collapse": "collapse",
   "chat.msg.openFile": "open in file manager",
