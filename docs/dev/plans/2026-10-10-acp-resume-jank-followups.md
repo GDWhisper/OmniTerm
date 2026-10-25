@@ -1,6 +1,6 @@
 # 离开浏览器后「假死」残余项：可见反馈与错峰
 
-> 状态：设计稿（2026-10-10）
+> 状态：**P1（①②③）与 P2 小项（④⑨）已实施**（2026-10-25，实施记录见文末）；⑤⑥⑦⑧ 未实施（见文末「未实施项」）
 > 触发条件：改 `useAcpChat.sendPrompt` 的失败路径、`ChatView` 聚焦补拉的触发时机、`chatStore.mergeLatestMessages` 的扫描预算、`FileEditor` 内建搜索、侧栏/健康检查轮询矩阵，或推进终端 WS 侧心跳前**必读**
 > 关联：`docs/dev/plans/2026-09-19-ws-idle-disconnect-heartbeat.md`（Phase 1 已部分落地，文末勘误）、`docs/dev/plans/2026-10-01-acp-refocus-latest-merge.md`（10-10 勘误）、`docs/dev/performance-and-safety.md` §P1/§S2、`docs/architecture/frontend.md`
 
@@ -127,3 +127,29 @@
 | `CHANGELOG.md` | ①②③ 各一条 Fixed；⑤⑥ 各一条 Changed |
 | `2026-09-19-ws-idle-disconnect-heartbeat.md` | ⑦ 的 Phase 0 结论回写 |
 | 本文件 | 实施偏差就地加「勘误」块 |
+
+---
+
+## 实施记录（2026-10-25）：①②③④⑨ 已落地
+
+改动文件与测试：
+
+| 项 | 改动 | 测试 |
+|---|---|---|
+| ③ | `chatStore.ts` 抽 `boundedTailScan`（有界尾部扫描纯函数），`mergeLatestMessages` rule 3/4 用它；预算常量与 `alignReplaySyncPayload` 共用 `ALIGN_SCAN_BUDGET` | `chatStore.catchup.test.ts` 补超限降级 1 条（预算外 echo 即使全等也走插入 + 预算内对照） |
+| ② | `ChatView.tsx` 新增 `scheduleCatchUp`（requestIdleCallback 降级 `setTimeout(0)`，`CATCH_UP_IDLE_TIMEOUT_MS=200`，pending 去重 + 卸载取消），挂载/visibility/focus/pageshow/E2 五个触发点全部改走它；`catchUpIfNeeded` 守卫加 `loadingHistory`、`loadOlderHistory` 守卫加 `catchUpInFlightRef`（双向互斥） | `ChatView.catchup.test.tsx` 新增 describe（错峰 1 条 + 双向互斥 2 条）；既有 13 条因错峰改造断言时机（`flushCatchUp` helper 等一拍宏任务；fake-timer 用例切回真时钟前先 `advanceTimersByTime(0)`，否则已排定的 fake 定时器被 `useRealTimers` 丢弃） |
+| ① | `useAcpChat.ts` 的 `sendPrompt` 卫哨拆分：空输入/无会话保持静默；socket 非 OPEN 落 `setError`，文案按 `connectionState` 分档（`connecting` → `chat.sendFail.reconnecting`，否则 `chat.sendFail.disconnected`，zh/en 两个 locale key）；hook 引入 `useTranslation`（`t` 与 `connectionState` 进 useCallback deps，消费方经 `AcpConnectionManager` 的 `sendRef` 晚绑定，identity 变化不扩散） | 新文件 `useAcpChat.sendfail.test.tsx` 5 条（CONNECTING / 无 socket / 握死 CLOSED / 空输入 / 成功路径不回归） |
+| ④ | `FileEditor.tsx` 拆「受控回显 `query`」与「生效查询 `activeQuery`」两层，150ms（`SEARCH_INPUT_DEBOUNCE_MS`）防抖后计算 effect 才重跑；计算 effect 本体零改动 | `FileEditor.search.test.tsx` 补「连续键入只算一次」1 条（spy `computeMatches` 计数 + 断言最终查询）；既有 9 条靠 `vi.waitFor` 天然容忍 150ms 延迟 |
+| ⑨ | a) `preHydrateBuffer` 改存 `{frame, bytes}` 并加条数（`PRE_HYDRATE_MAX_FRAMES`）/UTF-8 字节（`PRE_HYDRATE_MAX_BYTES`）双上限（值与 liveBuffer 同源），越界丢最旧 + 置 `needsCatchUp`；b) `flushLiveBuffer` 加可选 `sid` 参，ws 生命周期 effect cleanup 显式传本 effect 的 `sessionId`；rAF/setInterval 两处传参点包一层 lambda（`setInterval(flushLiveBuffer, …)` 会把 delay number 注进 `sid` 参数） | 新文件 `useAcpChat.prehydrate.test.tsx` 4 条（条数越界 / 字节越界 / 正常窗口不丢帧 / ⑨b 跨会话归属） |
+
+**验收对照**：① 三形态可见状态 + 成功路径零回归 ✓；② 不与 flush 抢帧 + 与上拉不并发 ✓（jsdom 无布局，「主线程无长任务」的 Performance 录制验证未做，预算语义由单测固化）；③ 共用预算常量 + 超限降级单测 ✓；④ 防抖单测 ✓（≥1MB 文件的 Performance 录制验证未做）；⑨ 两条边界各有回归单测 ✓。前端 `pnpm test` 1495 全绿、`tsc -b` 通过、`pnpm lint` 0 error。
+
+### 实施偏差（就地记录，方向不变）
+
+1. **② 的互斥不采用「loadingHistory 语义扩展」，改为双向守卫**。原设计「同一 `loadingHistory` 语义扩展为『历史在飞』」会让补拉触发「正在加载更早的记录…」UI 提示与贴底重钉（该字段驱动这两处），文案对补拉（拉最新页）是误导。改为 `catchUpIfNeeded` 读 `st.loadingHistory` 早退 + `loadOlderHistory` 读 `catchUpInFlightRef` 早退：互斥语义等价（两个早退都在同步段、检查与置位间无 await），无 UI 副作用。
+2. **③ 共享的是常量与降级语义，不共享函数体**。`alignReplaySyncPayload` 的扫描从 cursor **向后**且叠加整场总量预算（`MAX_ALIGN_COMPARISONS`）与指针提交；`mergeLatestMessages` 的候选扫描从尾部**向前**。方向相反、维度不同，强行参数化方向是为共享而共享（工程准则 7 反例），故只抽 `boundedTailScan` 服务合并侧，两者以 `ALIGN_SCAN_BUDGET` 同源 + 「超限即降级为既有安全路径」同族语义对齐。验收标准「共用同一预算常量」逐字满足。
+3. **⑨a 的超限策略是丢最旧 + 置 `needsCatchUp`，不是 liveBuffer 的「越界即 flush」**。hydrate 未落定前应用帧 = hydrate 因 messages 非空 bail = 丢整段历史，本结构下不存在「提前消费」这个选项；被丢帧内容后端累积器 ≤1s 已落库，聚焦补拉从 DB 幂等找回（显式找回路径，非静默丢弃）。
+
+### 未实施项（后续排期）
+
+⑤ 轮询矩阵收敛、⑥ 终端 WS 侧心跳、⑦ Phase 0 四格探针（需公网环境）、⑧ WS 集成测试脚手架——工程量中到大或需外部环境，本轮不动；各自触发条件与验收标准仍以本文件为准。
