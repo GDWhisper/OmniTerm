@@ -5,7 +5,10 @@ import { SessionRow, type SessionRowProps } from './SessionRow'
 import type { Session } from '../../api/client'
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, options?: { value?: number }) =>
+      typeof options?.value === 'number' ? `${key}:${options.value}` : key,
+  }),
 }))
 
 function makeSession(overrides: Partial<Session> = {}): Session {
@@ -57,6 +60,7 @@ describe('SessionRow 交互', () => {
     })
     document.body.removeChild(container)
     vi.useRealTimers()
+    vi.unstubAllGlobals()
   })
 
   function renderRow(props: SessionRowProps): HTMLElement {
@@ -190,11 +194,100 @@ describe('SessionRow 交互', () => {
     })
     expect(onContextMenu).not.toHaveBeenCalled()
     expect(row.querySelector('.row-action')).toBeNull()
+    expect(row.querySelector('.session-actions')).toBeNull()
+    expect(row.classList.contains('has-actions')).toBe(false)
+    // 选择模式没有动作要让位，时间槽保持可见
+    expect(row.querySelector('time.session-age')).toBeTruthy()
   })
 
   it('常规模式：行内不再有重命名按钮，删除按钮保留', () => {
     renderRow(baseProps())
     expect(container.querySelector('button[title="sidebar.rename"]')).toBeNull()
     expect(container.querySelector('button[title="sidebar.delete"]')).toBeTruthy()
+  })
+
+  it('时间优先取最近一次 turn 定稿时刻', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-24T12:00:00Z'))
+    const lastTurnAt = '2026-10-24T10:00:00Z'
+    const row = renderRow(
+      baseProps({
+        session: makeSession({
+          created_at: '2026-09-01T00:00:00Z',
+          last_turn_at: lastTurnAt,
+        }),
+      }),
+    )
+
+    const time = row.querySelector('time.session-age') as HTMLTimeElement
+    expect(time.getAttribute('datetime')).toBe(lastTurnAt)
+    expect(time.textContent).toBe('sidebar.ageHour:2')
+  })
+
+  it('没有 turn 记录时时间回退到创建时刻', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-24T12:00:00Z'))
+    const createdAt = '2026-10-24T09:00:00Z'
+    const row = renderRow(baseProps({ session: makeSession({ created_at: createdAt }) }))
+
+    const time = row.querySelector('time.session-age') as HTMLTimeElement
+    expect(time.getAttribute('datetime')).toBe(createdAt)
+    expect(time.textContent).toBe('sidebar.ageHour:3')
+  })
+
+  it('一分钟内显示「刚刚」', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-24T12:00:00Z'))
+    const row = renderRow(
+      baseProps({ session: makeSession({ created_at: '2026-10-24T11:59:30Z' }) }),
+    )
+
+    expect(row.querySelector('time.session-age')?.textContent).toBe('sidebar.ageNow')
+  })
+
+  it('标题溢出时挂渐隐 class 并写入 marquee 距离', () => {
+    let resizeCallback: ResizeObserverCallback | undefined
+    class SpyResizeObserver {
+      constructor(cb: ResizeObserverCallback) {
+        resizeCallback = cb
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', SpyResizeObserver as unknown as typeof ResizeObserver)
+
+    const row = renderRow(baseProps())
+    const title = row.querySelector('.session-name') as HTMLElement
+    Object.defineProperty(title, 'scrollWidth', { configurable: true, value: 220 })
+    Object.defineProperty(title, 'clientWidth', { configurable: true, value: 100 })
+
+    act(() => {
+      resizeCallback?.([], null as unknown as ResizeObserver)
+    })
+
+    expect(title.classList.contains('is-overflowing')).toBe(true)
+    expect(title.style.getPropertyValue('--session-marquee-distance')).toBe('120px')
+    expect(title.style.getPropertyValue('--session-marquee-duration')).toBe('6s')
+  })
+
+  it('ACP 在线会话的时间槽按 3 个行内动作展开', () => {
+    const row = renderRow(
+      baseProps({ session: makeSession({ acp_process_alive: true }) }),
+    )
+
+    expect(row.classList.contains('has-actions')).toBe(true)
+    expect(row.style.getPropertyValue('--session-action-count')).toBe('3')
+    expect(row.querySelectorAll('.session-actions .row-action')).toHaveLength(3)
+    expect(row.querySelector('time.session-age')).toBeTruthy()
+  })
+
+  it('终端会话只预留删除按钮的时间槽', () => {
+    const row = renderRow(
+      baseProps({ session: makeSession({ runtime_kind: 'tmux', tmux_session_name: 'omni-s1' }) }),
+    )
+
+    expect(row.style.getPropertyValue('--session-action-count')).toBe('1')
+    expect(row.querySelectorAll('.session-actions .row-action')).toHaveLength(1)
   })
 })

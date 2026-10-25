@@ -531,6 +531,23 @@ Variant classes: `.toast-error` (danger border/text), `.toast-warning` (warning)
   暂不可见，由主面板标题与展开列表兜底；选中行仍是纯前端概念，`sessionStatus()` 读不到，
   但这不构成抢位理由。
 
+### 7.4.1 会话行标题渐隐、hover 滚动与时间槽（2026-10-25）
+
+侧栏会话行（`SessionRow.tsx`）的长标题与行尾时间/动作共享同一条视觉基线：
+
+| 元素 | 规格 |
+|---|---|
+| 标题视口 `.session-name` | `flex:1; min-width:0; overflow:hidden; white-space:nowrap`，**不用省略号**；内层 `.session-name-text` 为 inline-block 的内容层 |
+| 右缘渐隐 | 仅在实际溢出（`ResizeObserver` 量 `scrollWidth > clientWidth`）时挂 `.is-overflowing`：`mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent)`。短标题不挂 mask，最后一段文字不会被误吃掉 |
+| hover 滚动 | `.session-name-text` 在行 hover 时往返滚动：`translateX(0)` → `-溢出距离` → `0`，两端各留约 8% 停留；速度按 25px/s 估算，时长钳制在 6–24s。`prefers-reduced-motion: reduce` 下关闭动画（渐隐保留） |
+| 时间槽 `.session-age` | 固定 44px，右对齐，12px `--text-faint`，`tabular-nums`；文案走 `relativeAgeParts`（刚刚 / N分 / N小时 / N天 / N个月 / N年） |
+| 时间来源 | `last_turn_at ?? created_at`：ACP 取最近一次 turn 定稿；从未有过 turn 或终端会话回退到创建时刻 |
+| 动作槽 `.session-actions` | **绝对定位**在时间槽上（`right:6px`，宽度 `n×20px + (n-1)×6px`），空闲不占布局；隐藏态 `pointer-events:none`，避免透明按钮拦截标题点击；`background-color: inherit` 在淡入时遮住正在淡出的时间 |
+| 让位行为 | `hover` / `focus-within` / `.active` / `pointer:coarse` 时：时间槽宽度扩到 `max(44px, 动作按钮宽度)` 并让 `.session-age` 淡出，动作按钮淡入。标题因此获得准确的可视宽度，渐隐边缘落在按钮左侧 |
+| 触屏 | 没有 hover，动作按钮恒显，时间槽恒为按钮宽度且时间隐藏；标题仅渐隐、不滚动 |
+
+**为什么用「时间元素本身扩宽」而不是空 spacer**：时间元素本来就在 flex 流里占 44px，hover 时把它扩到按钮宽度即可让标题按 flex 规则自动让位；按钮绝对定位叠在同一槽上，空闲时不再为不可见按钮预留 72px（ACP 在线会话的标题实际多出约 28px）。按钮尺寸/间隔是行内 CSS 变量 `--session-action-size` / `--session-gap`，改动须同步 `.release-btn` / `.archived-unarchive-btn` 与删除按钮的 20px。
+
 ### 7.5 气泡元信息行（`.chat-meta-row` — 耗时 / tps / hover 动作）
 
 assistant 气泡底部一条 `flex-wrap` 行：动作栏靠左、耗时与 tps 靠右（`margin-left:auto`）。**同一套实测宽度下，同行与换行的右缘都是气泡右缘**——气泡是内容宽度且该行是它的兄弟节点，CSS 表达不了「贴气泡右缘」，只能 `useLayoutEffect` + `ResizeObserver` 量最后一个 `[data-chat-body]` 的 `offsetWidth`（详见 `docs/dev/plans/archive/2026-08-30-acp-work-time.md` E10/E11）。

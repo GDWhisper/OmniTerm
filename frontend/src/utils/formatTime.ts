@@ -66,3 +66,30 @@ export function formatToolDuration(ms: number | null | undefined, locale?: strin
   if (ms === null || ms === undefined || !(ms > 0)) return null
   return formatWorkDuration(ms, locale)
 }
+
+export type RelativeAgeParts =
+  | { unit: 'now' }
+  | { unit: 'minute' | 'hour' | 'day' | 'month' | 'year'; value: number }
+
+const MINUTE_MS = 60_000
+const HOUR_MS = 60 * MINUTE_MS
+const DAY_MS = 24 * HOUR_MS
+const MONTH_DAYS = 30
+const YEAR_DAYS = 365
+
+/**
+ * 侧栏会话行的紧凑相对时间：只出一档单位（刚刚 / N分 / N小时 / N天 / N个月 / N年）。
+ * 单位文案由调用方按 `unit` 走 i18n，本函数只负责分档与取整。
+ * 未来时间戳（时钟偏差）按「刚刚」处理；非法时间戳返回 null。
+ */
+export function relativeAgeParts(ms: number, now: number = Date.now()): RelativeAgeParts | null {
+  if (!Number.isFinite(ms) || !Number.isFinite(now)) return null
+  const delta = now - ms
+  if (delta < MINUTE_MS) return { unit: 'now' }
+  if (delta < HOUR_MS) return { unit: 'minute', value: Math.floor(delta / MINUTE_MS) }
+  if (delta < DAY_MS) return { unit: 'hour', value: Math.floor(delta / HOUR_MS) }
+  const days = Math.floor(delta / DAY_MS)
+  if (days < MONTH_DAYS) return { unit: 'day', value: days }
+  if (days < YEAR_DAYS) return { unit: 'month', value: Math.floor(days / MONTH_DAYS) }
+  return { unit: 'year', value: Math.floor(days / YEAR_DAYS) }
+}
