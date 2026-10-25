@@ -782,6 +782,37 @@ describe('Sidebar 项目卡片拖拽排序', () => {
     return cardOf(id).querySelector('.sidebar-project-header') as HTMLElement
   }
 
+  /** 侧栏项目列表的滚动容器（.overlay-scroll-content 即 projectsScrollRef）。 */
+  function scroller(): HTMLElement {
+    return container.querySelector('.overlay-scroll-content') as HTMLElement
+  }
+
+  /** jsdom 无布局：给滚动容器确定的矩形与带夹紧的 scrollTop。 */
+  function stubScroller(
+    el: HTMLElement,
+    opts: { top?: number; height?: number; scrollTop?: number; max?: number } = {},
+  ) {
+    const top = opts.top ?? 0
+    const height = opts.height ?? 600
+    const max = opts.max ?? 400
+    let current = opts.scrollTop ?? 0
+    el.getBoundingClientRect = () =>
+      ({ top, bottom: top + height, left: 0, right: 220, width: 220, height, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
+    Object.defineProperty(el, 'scrollTop', {
+      configurable: true,
+      get: () => current,
+      set: (v: number) => {
+        current = Math.min(Math.max(0, v), max)
+      },
+    })
+    return {
+      getTop: () => current,
+      setTop: (v: number) => {
+        current = v
+      },
+    }
+  }
+
   function pointer(
     type: string,
     target: EventTarget,
@@ -799,6 +830,11 @@ describe('Sidebar 项目卡片拖拽排序', () => {
     )
   }
 
+  /** 跟随指针的拖拽浮层（克隆节点，挂在侧栏根节点、不随列表滚动）。 */
+  function ghost(): HTMLElement | null {
+    return container.querySelector('[data-drag-ghost]')
+  }
+
   /** 等触摸长按达成（500ms + 余量）；真实计时器，不用假时钟。 */
   function longPress() {
     return new Promise((resolve) => setTimeout(resolve, 560))
@@ -811,8 +847,9 @@ describe('Sidebar 项目卡片拖拽排序', () => {
 
     pointer('pointerdown', headerOf('proj-1'), { clientX: 4, clientY: 4 })
     pointer('pointermove', headerOf('proj-1'), { clientX: 14, clientY: 10 }) // > 4px：立即起拖
-    // 跟随指针的 transform 同步直写行内（不走 React）
-    expect(cardOf('proj-1').style.transform).toBe('translate(10px, 6px) scale(1.02)')
+    // 跟随指针的 transform 同步直写浮层（不走 React）；源卡片隐藏但保留布局
+    expect(ghost()!.style.transform).toBe('translate(10px, 6px) scale(1.02)')
+    expect(cardOf('proj-1').style.visibility).toBe('hidden')
     // 拽起 class 走 React 状态，等渲染落定
     await vi.waitFor(() => {
       expect(cardOf('proj-1').classList.contains('sidebar-project-lifted')).toBe(true)
@@ -828,10 +865,68 @@ describe('Sidebar 项目卡片拖拽排序', () => {
       expect(api.reorderProjects).toHaveBeenCalledWith(['proj-2', 'proj-1', 'proj-3'])
     })
     expect(useAppStore.getState().projects.map((p) => p.id)).toEqual(['proj-2', 'proj-1', 'proj-3'])
-    // 松手后：跟随 transform 清空（无残留偏移）、拽起 class 摘除
+    // 松手后：浮层移除、源卡片恢复可见、无残留 transform
+    expect(ghost()).toBeNull()
+    expect(cardOf('proj-1').style.visibility).toBe('')
     expect(cardOf('proj-1').style.transform).toBe('')
     expect(cardOf('proj-1').classList.contains('sidebar-project-lifted')).toBe(false)
     expect(container.querySelectorAll('.sidebar-project-drop-line')).toHaveLength(0)
+  })
+
+  it('拖拽中滚动列表：浮层挂在滚动容器外，卡片始终不脱离指针', async () => {
+    await renderSidebar()
+    const metrics = stubScroller(scroller())
+
+    pointer('pointerdown', headerOf('proj-1'), { clientX: 4, clientY: 40 })
+    pointer('pointermove', headerOf('proj-1'), { clientX: 14, clientY: 100 })
+    const g = ghost()!
+    expect(g.style.transform).toBe('translate(10px, 60px) scale(1.02)')
+    // 浮层不在滚动内容里：transform 溢出不会撑大 scrollHeight，
+    // 滚动也不会带着浮层走（无需按 scrollTop 补偿）。
+    expect(scroller().contains(g)).toBe(false)
+
+    // 滚轮/滚动条滚动不派发 pointermove；浮层保持指针下不动，只重算插入点。
+    metrics.setTop(30)
+    scroller().dispatchEvent(new Event('scroll'))
+    expect(ghost()!.style.transform).toBe('translate(10px, 60px) scale(1.02)')
+
+    pointer('pointerup', headerOf('proj-1'), { clientX: 14, clientY: 100 })
+    expect(ghost()).toBeNull()
+    expect(cardOf('proj-1').style.visibility).toBe('')
+  })
+
+  it('拖到列表底边自动滚动，且浮层保持指针下不动', async () => {
+    await renderSidebar()
+    const metrics = stubScroller(scroller())
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      frames.push(cb)
+      return frames.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+    try {
+      pointer('pointerdown', headerOf('proj-1'), { clientX: 4, clientY: 4 })
+      pointer('pointermove', headerOf('proj-1'), { clientX: 14, clientY: 590 })
+      expect(frames).toHaveLength(1)
+
+      // 跑一帧：指针在底边触发带内 → 容器向下滚动一帧步长
+      act(() => {
+        frames.shift()?.(performance.now())
+      })
+      expect(metrics.getTop()).toBe(10)
+      // 浮层是视口层，滚动量不该叠进 translate
+      expect(ghost()!.style.transform).toBe('translate(10px, 586px) scale(1.02)')
+
+      pointer('pointerup', headerOf('proj-1'), { clientX: 14, clientY: 590 })
+      // 松手后即使残留帧被调度也不再滚动
+      const rest = frames.splice(0)
+      act(() => {
+        for (const cb of rest) cb(performance.now())
+      })
+      expect(metrics.getTop()).toBe(10)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('上半区插入点在目标之前', async () => {
@@ -884,7 +979,7 @@ describe('Sidebar 项目卡片拖拽排序', () => {
     expect(cardOf('proj-3').classList.contains('sidebar-project-lifted')).toBe(true)
 
     pointer('pointermove', target, { clientX: 40, clientY: 130, pointerType: 'touch' })
-    expect(cardOf('proj-3').style.transform).toBe('translate(36px, 126px) scale(1.02)')
+    expect(ghost()!.style.transform).toBe('translate(36px, 126px) scale(1.02)')
     await vi.waitFor(() => {
       expect(container.querySelectorAll('.sidebar-project-drop-line')).toHaveLength(1)
     })

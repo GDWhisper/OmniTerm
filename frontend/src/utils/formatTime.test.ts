@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { formatHoverTime, formatToolDuration, formatTps, formatWorkDuration } from './formatTime'
+import {
+  formatHoverTime,
+  formatToolDuration,
+  formatTps,
+  formatWorkDuration,
+  relativeAgeParts,
+} from './formatTime'
 
 // 用本地时区构造 Date（new Date(y, m, d, h, min)），断言在任何时区下都成立。
 describe('formatHoverTime', () => {
@@ -80,5 +86,32 @@ describe('formatToolDuration', () => {
     expect(formatToolDuration(0, 'zh-CN')).toBeNull()
     expect(formatToolDuration(-1, 'zh-CN')).toBeNull()
     expect(formatToolDuration(Number.NaN, 'zh-CN')).toBeNull()
+  })
+})
+
+describe('relativeAgeParts', () => {
+  const now = Date.parse('2026-10-24T12:00:00Z')
+  const ago = (ms: number) => relativeAgeParts(now - ms, now)
+
+  it('按分钟/小时/天/月/年分档', () => {
+    expect(ago(30_000)).toEqual({ unit: 'now' })
+    expect(ago(60_000)).toEqual({ unit: 'minute', value: 1 })
+    expect(ago(59 * 60_000)).toEqual({ unit: 'minute', value: 59 })
+    expect(ago(60 * 60_000)).toEqual({ unit: 'hour', value: 1 })
+    expect(ago(23 * 60 * 60_000)).toEqual({ unit: 'hour', value: 23 })
+    expect(ago(24 * 60 * 60_000)).toEqual({ unit: 'day', value: 1 })
+    expect(ago(29 * 24 * 60 * 60_000)).toEqual({ unit: 'day', value: 29 })
+    expect(ago(30 * 24 * 60 * 60_000)).toEqual({ unit: 'month', value: 1 })
+    expect(ago(365 * 24 * 60 * 60_000)).toEqual({ unit: 'year', value: 1 })
+  })
+
+  it('未来时间戳（时钟偏差）按刚刚处理', () => {
+    expect(relativeAgeParts(now + 5_000, now)).toEqual({ unit: 'now' })
+  })
+
+  it('非法时间戳返回 null（调用方不渲染数字）', () => {
+    expect(relativeAgeParts(Number.NaN, now)).toBeNull()
+    expect(relativeAgeParts(now, Number.NaN)).toBeNull()
+    expect(relativeAgeParts(Number.POSITIVE_INFINITY, now)).toBeNull()
   })
 })

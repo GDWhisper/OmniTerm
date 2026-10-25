@@ -33,6 +33,9 @@ interface VersionInfo {
 
 type UpdatePhase = 'idle' | 'updating' | 'done'
 
+/** 重启影响预检结果：本次重启会中断的会话进程数（tmux 不受影响，不计数）。 */
+type RestartImpact = { pty: number; acp: number }
+
 export function UpdateBadge() {
   const { t } = useTranslation()
   const [info, setInfo] = useState<VersionInfo | null>(null)
@@ -228,7 +231,13 @@ function UpdatePanel({
       })
   }
 
-  const doRestart = () => {
+  // 「立即重启」可能中断活跃的 pty/ACP 会话进程：先预检，有影响才展开确认。
+  // 条件触发——没有活跃会话时不打扰用户，保持一键重启。
+  const [restartImpact, setRestartImpact] = useState<RestartImpact | 'unknown' | null>(null)
+  const [checkingImpact, setCheckingImpact] = useState(false)
+
+  const startRestart = () => {
+    setRestartImpact(null)
     setRestarting(true)
     setRestartFailed(false)
     api
@@ -237,6 +246,26 @@ function UpdatePanel({
         setRestarting(false)
         addToast('error', e instanceof Error ? e.message : String(e))
       })
+  }
+
+  const doRestart = async () => {
+    if (checkingImpact) return
+    setCheckingImpact(true)
+    try {
+      const impact = await api.systemRestartPreflight()
+      if (impact.pty + impact.acp > 0) {
+        setRestartImpact(impact)
+        return
+      }
+      startRestart()
+    } catch (e) {
+      // 预检失败不静默跳过提醒：按「数量未知」继续让用户显式确认——
+      // 宁可多一次确认，也不要在有活跃会话时静默重启。
+      console.warn('[update] restart preflight failed:', e)
+      setRestartImpact('unknown')
+    } finally {
+      setCheckingImpact(false)
+    }
   }
 
   const restartSupported = !info.container && info.restart_supported !== false
@@ -348,9 +377,32 @@ function UpdatePanel({
                         {t('update.restartNow')}
                       </button>
                     </>
+                  ) : restartImpact ? (
+                    <>
+                      <div role="alert" style={{ fontSize: 12, color: 'var(--warning)' }}>
+                        {restartImpact === 'unknown'
+                          ? t('update.restartImpactUnknown')
+                          : t('update.restartImpact', {
+                              pty: restartImpact.pty,
+                              acp: restartImpact.acp,
+                            })}
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="btn-pixel btn-pixel-primary" onClick={startRestart}>
+                          {t('update.restartConfirm')}
+                        </button>
+                        <button className="btn-pixel" onClick={() => setRestartImpact(null)}>
+                          {t('modal.cancel')}
+                        </button>
+                      </div>
+                    </>
                   ) : (
                     <>
-                      <button className="btn-pixel btn-pixel-primary" onClick={doRestart}>
+                      <button
+                        className="btn-pixel btn-pixel-primary"
+                        disabled={checkingImpact}
+                        onClick={() => void doRestart()}
+                      >
                         {t('update.restartNow')}
                       </button>
                       <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>

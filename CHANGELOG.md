@@ -47,6 +47,23 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [0.3.6] - 2026-10-25
+
+### Added
+
+- (2026-10-22 02:14) `[frontend]` `[backend]` `[api]` 服务重启改为**条件确认**：点击「立即重启」前先查 `GET /system/restart-preflight`，存在活跃 pty / ACP 会话进程时在升级面板内展开中断提醒（显示各自数量，并写明 tmux 进程不受影响），用户确认后才重启；无活跃会话保持一键直接重启，预检失败按「数量未知」要求确认而不是静默跳过（`src/api/system.rs`、`src/engine/pty/mod.rs`、`src/engine/mod.rs`、`frontend/src/components/Sidebar/UpdateBadge.tsx`、`frontend/src/api/client.ts`）
+
+### Changed
+
+- (2026-10-25 00:08) `[frontend]` 侧栏会话行 UX：过长标题改为右缘渐隐（溢出时 `mask-image`），鼠标 hover 时往返滚动以查看完整标题；行尾显示上次会话距今多久（ACP 取 `last_turn_at`，无 turn / 终端会话回退 `created_at`，文字走紧凑分档并由共享分钟级时钟刷新）。hover / 键盘聚焦 / 触屏时时间槽扩展为动作按钮槽并淡出时间（聚焦/激活行不再常显动作按钮，与普通行一致；触屏因无 hover 仍恒显），动作按钮改为绝对定位，空闲时不再为不可见按钮预留宽度（`frontend/src/components/Sidebar/SessionRow.tsx`、`frontend/src/hooks/useMinuteNow.ts`、`frontend/src/utils/formatTime.ts`、`frontend/src/index.css`）
+
+### Fixed
+
+- (2026-10-25 02:27) `[infra]` 升级 `tokio` 1.53.1 → 1.54.1，修复 RUSTSEC-2026-0386（`AsyncFd` 安全构造函数未要求 fd 所有权证明，dup + close 后 fd 号被复用可致注册表 use-after-free；本项目不直接使用 `AsyncFd`，但按最小版本跟进，cargo-deny 阻塞门禁已转绿）
+- (2026-10-25 00:20) `[frontend]` 聊天面板顶部错误条新增 ✕ 关闭按钮：配置项设置失败、帧解析失败等一次性错误此前没有收尾事件，只能等下一次发送或重连才消失，会一直占住消息区上方（`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/index.css`）
+- (2026-10-24 01:52) `[frontend]` 侧栏项目卡片拖拽不再因滚动脱钩：跟随视觉改为挂在侧栏根节点的克隆浮层（源卡隐藏保留布局），滚动列表（滚轮/滚动条）时卡片固定在指针下；浮层脱离滚动内容，也避免了 transform 溢出把 `scrollHeight` 越滚越大（因此不会滚进空白、滚动条拇指不再随拖拽缩水）。拖到列表上/下边界时自动滚动（48px 触发带、每帧 10px，到真实边界即停），判定抽到 `frontend/src/utils/edgeAutoScroll.ts` 与 FileManager 拖拽共用（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/FileManager/useFileDrag.ts`）
+- (2026-10-22 12:15) `[frontend]` 聊天区上拉加载更早历史不再连锁翻页：前插补偿抬高滚动位置后会立即再触发一次加载、连续翻页直到历史耗尽；改为带滞后锁（用户确实向上滚过才解锁），且触发窗口按视口比例（1.5 屏）计算、短会话仍可上拉加载（`frontend/src/components/Chat/ChatView.tsx`）
+
 ## [0.3.5] - 2026-10-22
 
 ### Added

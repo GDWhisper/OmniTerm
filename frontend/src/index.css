@@ -1461,11 +1461,21 @@ body.fm-dragging * {
 }
 
 .sidebar-session-item {
-  position: relative; /* ACP 徽标绝对定位锚点（叠加在左侧缩进槽，不占行内布局） */
+  --session-gap: 6px;
+  --session-action-size: 20px;
+  --session-age-width: 44px;
+  --session-title-fade: 24px;
+  /* 行尾动作按钮宽度：n 个按钮 + n-1 个间隔。按钮尺寸见 RowActionButtons
+     与 .release-btn / .archived-unarchive-btn（均为 20px），改尺寸须同步。 */
+  --session-actions-width: calc(
+    var(--session-action-count, 1) * var(--session-action-size) +
+    (var(--session-action-count, 1) - 1) * var(--session-gap)
+  );
+  position: relative; /* ACP 徽标与行尾动作按钮的绝对定位锚点 */
   padding: 3px 6px;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--session-gap);
   cursor: pointer;
   margin-bottom: 1px;
   color: var(--text-secondary);
@@ -1496,6 +1506,15 @@ body.fm-dragging * {
     user-select: none;
     -webkit-touch-callout: none;
   }
+  /* 触屏没有 hover：动作按钮恒显，时间槽直接让位并隐藏时间。 */
+  .sidebar-session-item.has-actions .session-age {
+    width: max(var(--session-age-width), var(--session-actions-width));
+    opacity: 0;
+  }
+  .sidebar-session-item.has-actions .session-actions {
+    background-color: inherit;
+    pointer-events: auto;
+  }
 }
 
 /* ACP 会话折叠切换行（「展开更多 / 收起」）——可见/隐藏行的接缝，需醒目可点 */
@@ -1519,9 +1538,88 @@ body.fm-dragging * {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
   font-size: 14px;
+}
+
+/* 过长标题在右缘渐隐（不用省略号）；只在实际溢出时挂 mask，
+   短标题不会被吃掉最后一段。 */
+.sidebar-session-item .session-name.is-overflowing {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - var(--session-title-fade)), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - var(--session-title-fade)), transparent);
+}
+
+.sidebar-session-item .session-name-text {
+  display: inline-block;
+}
+
+/* hover 时才滚动播放；距离与时长由 SessionRow 的溢出测量给出。
+   往返滚动避免「滚到尾部后跳回开头」的突变。 */
+.sidebar-session-item:hover .session-name.is-overflowing .session-name-text {
+  animation: sidebar-session-marquee var(--session-marquee-duration, 8s) linear infinite;
+}
+
+@keyframes sidebar-session-marquee {
+  0%, 8% {
+    transform: translateX(0);
+  }
+  45%, 55% {
+    transform: translateX(calc(-1 * var(--session-marquee-distance, 0px)));
+  }
+  92%, 100% {
+    transform: translateX(0);
+  }
+}
+
+/* 行尾时间槽：空闲时显示「上次会话距今多久」；hover/focus/active/触屏时
+   槽宽扩展到动作按钮所需宽度，时间淡出、按钮淡入（共用一个槽，不额外
+   挤占标题宽度）。时间元素始终留在布局里，作为槽宽的基准。 */
+.sidebar-session-item .session-age {
+  flex: 0 0 auto;
+  width: var(--session-age-width);
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  transition: width 0.1s steps(2), opacity 0.1s steps(2);
+}
+
+.sidebar-session-item .session-actions {
+  position: absolute;
+  right: 6px; /* 与行 padding-right 对齐 */
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--session-gap);
+  width: var(--session-actions-width);
+  background-color: transparent;
+  pointer-events: none; /* 隐藏态不得拦截标题/时间的点击 */
+}
+
+.sidebar-session-item.has-actions:hover .session-age,
+.sidebar-session-item.has-actions:focus-within .session-age {
+  width: max(var(--session-age-width), var(--session-actions-width));
+  opacity: 0;
+}
+
+.sidebar-session-item.has-actions:hover .session-actions,
+.sidebar-session-item.has-actions:focus-within .session-actions {
+  /* 只在按钮可见态继承行背景：空闲时若也继承，active 行的不透明背景
+     会把这个绝对定位槽下面的时间盖住。 */
+  background-color: inherit;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-session-item:hover .session-name.is-overflowing .session-name-text {
+    animation: none;
+  }
 }
 
 /* 活跃会话文字提亮一档，与 .active 同色但语义不同（「在跑/待读」vs「选中」）。
@@ -2390,6 +2488,53 @@ input[type="range"]:active::-webkit-slider-thumb {
 }
 .chat-msg-row.chat-msg-row-flash {
   animation: chat-msg-row-flash 1.5s ease-out forwards;
+}
+
+/* ── 聊天面板顶部错误条 ────────────────────────────────────────
+   一次性错误（发送失败 / 配置项设置失败 / 帧错误）在会话内没有天然收尾事件，
+   必须给显式关闭出口，否则会一直占住消息区上方直到用户下一次发送。 */
+.chat-error-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  background: var(--danger-12);
+  color: var(--danger);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.chat-error-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+  cursor: text;
+}
+
+.chat-error-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  margin-top: -2px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.chat-error-dismiss:hover,
+.chat-error-dismiss:focus-visible {
+  opacity: 1;
+  border-color: currentColor;
 }
 
 /* ── 聊天面板内的会话内搜索（F06）─────────────────────────────
@@ -4037,8 +4182,7 @@ select optgroup option {
 .sidebar-wt-row:focus-within .sidebar-wt-add-btn,
 .sidebar-wt-row:focus-within .row-action,
 .sidebar-session-item:hover .row-action,
-.sidebar-session-item:focus-within .row-action,
-.sidebar-session-item.active .row-action {
+.sidebar-session-item:focus-within .row-action {
   opacity: 1;
 }
 /* ── Touch devices: action buttons always visible (no hover to reveal) ── */

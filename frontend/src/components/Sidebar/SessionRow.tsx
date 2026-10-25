@@ -1,15 +1,29 @@
-import { memo, useRef, type MouseEvent } from 'react'
+import { memo, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Session } from '../../api/client'
 import { sessionStatus, type AcpActivity } from '../../utils/agentAggregate'
+import { relativeAgeParts } from '../../utils/formatTime'
 import { sessionDisplayName } from '../../utils/sessionDisplayName'
 import { useAgentStore } from '../../stores/agentStore'
 import type { AttentionReason } from '../../hooks/useAttention'
 import { useLongPress, LONG_PRESS_CLICK_SUPPRESS_MS } from '../../hooks/useLongPress'
+import { useMinuteNow } from '../../hooks/useMinuteNow'
 import { hapticTap } from '../../utils/haptics'
 import { ArchiveButton, DeleteButton, ReleaseButton } from './RowActionButtons'
 import type { DeleteTarget } from './DeleteConfirmDialog'
 import type { ContextMenuPoint } from '../Common/ContextMenu'
+
+const MARQUEE_PX_PER_SECOND = 25
+const MARQUEE_MIN_SECONDS = 6
+const MARQUEE_MAX_SECONDS = 24
+
+const AGE_LABEL_KEYS = {
+  minute: 'sidebar.ageMinute',
+  hour: 'sidebar.ageHour',
+  day: 'sidebar.ageDay',
+  month: 'sidebar.ageMonth',
+  year: 'sidebar.ageYear',
+} as const
 
 export interface SessionRowProps {
   session: Session
@@ -71,6 +85,61 @@ export const SessionRow = memo(function SessionRow({
     },
   })
 
+  // 行尾动作按钮数决定「时间槽」展开后的宽度。选择模式不渲染动作，
+  // 时间槽保持纯时间宽度（见 index.css .session-age / .session-actions）。
+  const actionCount = selectionMode
+    ? 0
+    : session.runtime_kind === 'acp'
+      ? (session.acp_process_alive ? 3 : 2)
+      : 1
+  const hasActions = actionCount > 0
+
+  // 共享分钟级时钟：非活动项目的会话不再由 3s 轮询刷新，相对时间仍需走字。
+  const now = useMinuteNow()
+  // 「上次会话」口径：ACP 取最近一次 turn 定稿时刻；从未有过 turn 或终端会话
+  // 回退到创建时刻（后端目前没有更细的终端活动时间）。
+  const lastActiveAt = session.last_turn_at || session.created_at
+  const lastActiveMs = Date.parse(lastActiveAt)
+  const age = relativeAgeParts(lastActiveMs, now)
+  const ageLabel =
+    age === null
+      ? ''
+      : age.unit === 'now'
+        ? t('sidebar.ageNow')
+        : t(AGE_LABEL_KEYS[age.unit], { value: age.value })
+
+  const titleRef = useRef<HTMLSpanElement>(null)
+  const [titleOverflow, setTitleOverflow] = useState(0)
+
+  // 标题溢出测量：hover 时行尾时间槽会扩展为动作按钮槽，标题可用宽度随之
+  // 变化，ResizeObserver 会在这一拍补测，marquee 距离始终以当前宽度为准。
+  useLayoutEffect(() => {
+    const el = titleRef.current
+    if (!el) return
+    const measure = () => {
+      const next = Math.max(0, el.scrollWidth - el.clientWidth)
+      setTitleOverflow((prev) => (Math.abs(prev - next) <= 1 ? prev : next))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [displayName])
+
+  const marqueeStyles =
+    titleOverflow > 0
+      ? ({
+          '--session-marquee-distance': `${titleOverflow}px`,
+          '--session-marquee-duration': `${Math.min(
+            MARQUEE_MAX_SECONDS,
+            Math.max(MARQUEE_MIN_SECONDS, Math.round(titleOverflow / MARQUEE_PX_PER_SECOND)),
+          )}s`,
+        } as CSSProperties)
+      : undefined
+  const rowStyles = hasActions
+    ? ({ '--session-action-count': actionCount } as CSSProperties)
+    : undefined
+
   const handleClick = () => {
     if (Date.now() - longPressAtRef.current < LONG_PRESS_CLICK_SUPPRESS_MS) return
     if (selectionMode) {
@@ -107,7 +176,8 @@ export const SessionRow = memo(function SessionRow({
 
   return (
     <div
-      className={`sidebar-session-item ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''}`}
+      className={`sidebar-session-item ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''}${hasActions ? ' has-actions' : ''}`}
+      style={rowStyles}
       onClick={handleClick}
       onContextMenu={handleContextMenu}
       onTouchStart={onTouchStart}
@@ -165,8 +235,12 @@ export const SessionRow = memo(function SessionRow({
             : undefined
         }
       />
-      <span className={`session-name${isLive ? ' session-name-live' : ''}`}>
-        {displayName}
+      <span
+        ref={titleRef}
+        className={`session-name${isLive ? ' session-name-live' : ''}${titleOverflow > 0 ? ' is-overflowing' : ''}`}
+        style={marqueeStyles}
+      >
+        <span className="session-name-text">{displayName}</span>
       </span>
       {/* Attention badge */}
       {attnReason && (
@@ -187,42 +261,54 @@ export const SessionRow = memo(function SessionRow({
           {attnReason === 'decision' ? '⏳' : attnReason === 'error' ? '⚠' : '✓'}
         </span>
       )}
-      {/* 行内操作按钮：选择模式下整体不渲染（.row-action 在 pointer:coarse 下
-          恒显，不能靠 opacity 隐藏）。重命名入口已移至右键/长按菜单。 */}
-      {!selectionMode && session.runtime_kind === 'acp' && session.acp_process_alive && (
-        <ReleaseButton
-          onClick={(e) => {
-            e.stopPropagation()
-            onReleaseRequest(session)
-          }}
-        />
-      )}
-      {!selectionMode && session.runtime_kind === 'acp' && (
-        <ArchiveButton
-          onClick={(e) => {
-            e.stopPropagation()
-            onArchiveRequest(session)
-          }}
-        />
-      )}
-      {!selectionMode && (
-        <DeleteButton
-          onClick={(e) => {
-            e.stopPropagation()
-            onDeleteRequest({
-              type: 'session',
-              id: session.id,
-              name: session.name || session.tmux_session_name || t('sidebar.unnamed'),
-              // 删除确认弹窗据此决定是否显示「同时删除 agent 侧记录」勾选框
-              // （可用性只看 agent 能力）；三个 ACP 字段供两段式补报（行删掉后
-              // 后端取不到，由前端带着补发 agent 侧删除端点）
-              runtimeKind: session.runtime_kind,
-              acpSessionId: session.acp_session_id,
-              agentId: session.agent_id,
-              workspacePath: session.workspace_path,
-            })
-          }}
-        />
+      {/* 行尾时间槽：空闲时显示「上次会话距今多久」；hover/focus/active/触屏
+          时槽宽扩展到动作按钮所需宽度，时间淡出，按钮淡入（两者共用一个槽，
+          不额外占用标题宽度）。时间本身仍留在布局里作为槽宽基准。 */}
+      <time
+        className="session-age"
+        dateTime={Number.isFinite(lastActiveMs) ? lastActiveAt : undefined}
+      >
+        {ageLabel}
+      </time>
+      {/* 行内操作按钮：绝对定位叠在时间槽上，避免空闲时为不可见按钮预留宽度。
+          选择模式整体不渲染（.row-action 在 pointer:coarse 下恒显，不能靠
+          opacity 隐藏）。重命名入口已移至右键/长按菜单。 */}
+      {hasActions && (
+        <div className="session-actions">
+          {session.runtime_kind === 'acp' && session.acp_process_alive && (
+            <ReleaseButton
+              onClick={(e) => {
+                e.stopPropagation()
+                onReleaseRequest(session)
+              }}
+            />
+          )}
+          {session.runtime_kind === 'acp' && (
+            <ArchiveButton
+              onClick={(e) => {
+                e.stopPropagation()
+                onArchiveRequest(session)
+              }}
+            />
+          )}
+          <DeleteButton
+            onClick={(e) => {
+              e.stopPropagation()
+              onDeleteRequest({
+                type: 'session',
+                id: session.id,
+                name: session.name || session.tmux_session_name || t('sidebar.unnamed'),
+                // 删除确认弹窗据此决定是否显示「同时删除 agent 侧记录」勾选框
+                // （可用性只看 agent 能力）；三个 ACP 字段供两段式补报（行删掉后
+                // 后端取不到，由前端带着补发 agent 侧删除端点）
+                runtimeKind: session.runtime_kind,
+                acpSessionId: session.acp_session_id,
+                agentId: session.agent_id,
+                workspacePath: session.workspace_path,
+              })
+            }}
+          />
+        </div>
       )}
     </div>
   )

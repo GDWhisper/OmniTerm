@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Commit-msg hook: 拒绝 AI 工具把自身写入提交署名（Co-Authored-By / Generated with 等）。
+# 设计依据: AGENTS.md 核心规则 1（提交约定）。
+#
+# 安装（per worktree，已由 dev.sh start 自动完成）:
+#   git config core.hooksPath scripts/hooks
+#   chmod +x scripts/hooks/commit-msg
+#
+# 绕过（不推荐）: git commit --no-verify
+
+set -e
+
+MSG_FILE="$1"
+[ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ] || exit 0
+
+# AI 工具/厂商标识。只匹配署名行/生成尾注，普通正文提到这些词不受影响。
+AI_PATTERN='(claude|anthropic|codex|openai|chatgpt|gpt-[0-9]|copilot|gemini|cursor|aider|devin|windsurf|cline|roo[ -]?code|opencode|sourcegraph|cody|codebuff|freebuff)'
+
+# 1) 协作者/署名类 trailer：值里出现 AI 标识即拒绝。
+HIT=$(grep -Ein "^[[:space:]]*(co-authored-by|co-author|assisted-by|generated-by|authored-by)[[:space:]]*:.*$AI_PATTERN" "$MSG_FILE" || true)
+if [ -n "$HIT" ]; then
+  echo "[commit-msg] 拒绝提交：提交信息包含 AI 工具署名" >&2
+  echo "$HIT" | sed 's/^/  /' >&2
+  echo "  作者只能是 git config 的 user.name / user.email。" >&2
+  echo "  见 AGENTS.md「提交约定」；确需绕过用 git commit --no-verify。" >&2
+  exit 1
+fi
+
+# 2) "Generated with <AI>" / "🤖 Generated with ..." 式尾注。
+HIT_GEN=$(grep -Ein "generated[ -](with|by)[^\n]*$AI_PATTERN" "$MSG_FILE" || true)
+if [ -n "$HIT_GEN" ]; then
+  echo "[commit-msg] 拒绝提交：提交信息包含 AI 生成工具尾注" >&2
+  echo "$HIT_GEN" | sed 's/^/  /' >&2
+  echo "  见 AGENTS.md「提交约定」；确需绕过用 git commit --no-verify。" >&2
+  exit 1
+fi
+
+# 3) codebuff / freebuff 模糊匹配：大小写、分隔符（code-buff / code buff）、单字符错拼或漏字
+#    （codebuf / c0debuff / freebufff）。只在署名行与生成行上判定，正文提到不拦；
+#    按 token 匹配并限制长度，避免 "Cody Buffington" 这类跨词误伤。
+FUZZY_HIT=$(awk '
+function lev(a, b,    la, lb, i, j, d, c) {
+  la = length(a); lb = length(b)
+  if (la == 0) return lb
+  if (lb == 0) return la
+  for (i = 0; i <= la; i++) d[i, 0] = i
+  for (j = 0; j <= lb; j++) d[0, j] = j
+  for (i = 1; i <= la; i++) {
+    for (j = 1; j <= lb; j++) {
+      c = (substr(a, i, 1) == substr(b, j, 1)) ? 0 : 1
+      d[i, j] = d[i-1, j] + 1
+      if (d[i, j-1] + 1 < d[i, j]) d[i, j] = d[i, j-1] + 1
+      if (d[i-1, j-1] + c < d[i, j]) d[i, j] = d[i-1, j-1] + c
+    }
+  }
+  return d[la, lb]
+}
+BEGIN { targets[1] = "codebuff"; targets[2] = "freebuff" }
+{
+  low = tolower($0)
+  if (low !~ /^[[:space:]]*(co-authored-by|co-author|assisted-by|generated-by|authored-by)[[:space:]]*:/ &&
+      low !~ /generated[ -](with|by)/) next
+  nt = split(low, raw, /[^a-z0-9]+/)
+  n = 0
+  for (k = 1; k <= nt; k++) if (raw[k] != "") tok[++n] = raw[k]
+  for (t = 1; t <= 2; t++) {
+    target = targets[t]; tl = length(target)
+    for (k = 1; k <= n; k++) {
+      w = tok[k]
+      if (length(w) >= tl - 1 && length(w) <= tl + 1 && lev(w, target) <= 1) { print NR": "$0; exit }
+      if (k < n) {
+        w2 = tok[k] tok[k+1]
+        if (length(w2) >= tl - 1 && length(w2) <= tl + 1 && lev(w2, target) <= 1) { print NR": "$0; exit }
+      }
+    }
+  }
+}
+' "$MSG_FILE" || true)
+if [ -n "$FUZZY_HIT" ]; then
+  echo "[commit-msg] 拒绝提交：提交信息包含 codebuff/freebuff 署名（含变体）" >&2
+  echo "$FUZZY_HIT" | sed 's/^/  /' >&2
+  echo "  见 AGENTS.md「提交约定」；确需绕过用 git commit --no-verify。" >&2
+  exit 1
+fi
+
+exit 0

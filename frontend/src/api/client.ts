@@ -378,6 +378,10 @@ export const api = {
       restart_supported?: boolean
       auto_restart?: boolean
     }>('/system/update', { method: 'POST' }),
+  // 重启影响预检：返回会被重启中断的会话进程数（pty = 引擎常驻会话，
+  // acp = supervisor 驻留子进程）。tmux server 不受重启影响，不计数。
+  systemRestartPreflight: () =>
+    request<{ pty: number; acp: number }>('/system/restart-preflight', { silent: true }),
   systemRestart: () =>
     request<{ status: string }>('/system/restart', { method: 'POST' }),
 

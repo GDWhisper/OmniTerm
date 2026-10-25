@@ -19,6 +19,7 @@ import { UpdateBadge } from './UpdateBadge'
 import { ProjectCard } from './ProjectCard'
 import { sessionsForWorktree } from '../../utils/worktreeSessions'
 import { computeProjectReorder } from '../../utils/projectReorder'
+import { autoScrollNearEdge } from '../../utils/edgeAutoScroll'
 import { hapticTap } from '../../utils/haptics'
 import { RenameDialog, type RenameTarget } from './RenameDialog'
 import { DeleteConfirmDialog, type DeleteTarget } from './DeleteConfirmDialog'
@@ -61,6 +62,10 @@ const PROJ_LONG_PRESS_CANCEL_PX = 10
 /** 拖拽达成后抑制 header 补发 click 的窗口（同 SessionRow 长按抑制）。 */
 const PROJ_DRAG_CLICK_SUPPRESS_MS = 700
 
+/** 拖拽到列表上/下边缘时自动滚动的触发带宽度与每帧步长（px）。 */
+const PROJ_DRAG_EDGE_SCROLL_PX = 48
+const PROJ_DRAG_EDGE_SCROLL_STEP_PX = 10
+
 /** 项目卡片拖拽的事件态（window 处理器直读，避开陈旧闭包）。 */
 interface ProjDragState {
   id: string
@@ -76,6 +81,28 @@ interface ProjDragState {
   overId: string
   before: boolean
   timer: number | null
+  /** 最近一次指针位置/命中目标：滚动与边缘自动滚动没有 pointermove，
+   *  重算跟随与插入点只能靠它们（target 仅 jsdom 等无命中测试环境兜底）。 */
+  lastX: number
+  lastY: number
+  lastTarget: EventTarget | null
+  /** 边缘自动滚动的 rAF 句柄；收尾与卸载必须取消。 */
+  raf: number | null
+}
+
+/** 指针下方最近的项目卡片。触摸指针有隐式 capture，e.target 会停在按下处的
+ *  卡片上命中不了别的卡，故优先 elementFromPoint；jsdom 无布局时回退 target。 */
+function projectCardAtPoint(
+  x: number,
+  y: number,
+  target: EventTarget | null,
+): HTMLElement | null {
+  if (typeof document.elementFromPoint === 'function') {
+    const hit = document.elementFromPoint(x, y)?.closest?.('[data-proj-id]')
+    if (hit) return hit as HTMLElement
+  }
+  const el = target as Element | null
+  return (el?.closest?.('[data-proj-id]') as HTMLElement | null) ?? null
 }
 
 export function Sidebar() {
@@ -166,11 +193,13 @@ export function Sidebar() {
     before: boolean
   } | null>(null)
   const projDragRef = useRef<ProjDragState | null>(null)
-  // 拽起卡的 DOM 引用：跟随指针的 transform 在此直写。pointermove 是高频事件，
-  // 每拍走 React 重渲染会让整棵侧栏（含全部会话行）跟着抖——与聊天元信息读数
-  // 直写 DOM、抽屉拖拽直改宽度同一手法。React 只管理 lifted class
-  // 与插入线（目标变化才动），不管理 transform，故松手时须手动清空。
-  const draggedElRef = useRef<HTMLElement | null>(null)
+  // 拖拽视觉分两层：源卡片留在列表里（visibility:hidden，保持布局与插入线
+  // 几何），跟随指针的是克隆出来的浮层。浮层挂在侧栏根节点（不随列表滚动），
+  // 因此 translate 不会撑大滚动容器的 scrollable overflow——直接在源卡片上
+  // translate 会让 transform 溢出计入 scrollHeight，边缘自动滚动会一路滚进
+  // 空白，滚动条拇指也会随拖拽缩水。浮层 transform 直写（高频，不走 React）。
+  const dragSourceRef = useRef<HTMLElement | null>(null)
+  const dragGhostRef = useRef<HTMLElement | null>(null)
   // 拖拽达成时间戳：抑制其后续补发的 header click。浏览器把 down/up 的最近
   // 公共祖先作为 click 目标——起点在某张卡头部、终点漂到别的卡时 click 落在
   // 原头部，不抑制会演变成展开切换（SessionRow 长按补发 click 同款手法）。
@@ -587,38 +616,127 @@ export function Sidebar() {
     [setProjects, addToast, t],
   )
 
-  /** 起拖达成：记 DOM 引用（跟随指针用）+ 上浮 class + 触觉反馈。 */
+  /** 收尾拖拽 DOM：移除浮层并恢复源卡片可见性（松手/取消/卸载共用）。 */
+  const clearProjDragDom = useCallback(() => {
+    if (dragGhostRef.current) {
+      dragGhostRef.current.remove()
+      dragGhostRef.current = null
+    }
+    if (dragSourceRef.current) {
+      dragSourceRef.current.style.visibility = ''
+      dragSourceRef.current = null
+    }
+  }, [])
+
+  /** 按事件态重算浮层跟随与插入点。pointermove / 列表滚动 / 边缘自动滚动
+   *  三条路径共用：浮层坐标相对侧栏根节点、不随列表滚动，故 translate 只需
+   *  指针位移（无需滚动补偿），滚动时卡片自然不脱钩；插入点读的是滚动后的
+   *  布局，指示线随内容同步。 */
+  const updateProjDragPosition = useCallback((st: ProjDragState) => {
+    const dx = st.lastX - st.startX
+    const dy = st.lastY - st.startY
+    // scale(1.02) 是「捏在手里」的放大暗示，与投影/描边同向加强。
+    if (dragGhostRef.current) {
+      dragGhostRef.current.style.transform = `translate(${dx}px, ${dy}px) scale(1.02)`
+    }
+    // 插入点判定：命中卡是「被拽起卡下方」的那张（源卡片已隐藏、浮层
+    // pointer-events:none，命中测试都穿得过去）。
+    const card = projectCardAtPoint(st.lastX, st.lastY, st.lastTarget)
+    const overId = card?.dataset.projId
+    if (!overId || overId === st.id) {
+      // 悬停在自己头上 / 移出列表：摘插入点，卡片保持被拽起
+      if (st.overId !== '') {
+        st.overId = ''
+        setProjDrag({ draggingId: st.id, overId: '', before: true })
+      }
+      return
+    }
+    const rect = card.getBoundingClientRect()
+    const before = st.lastY < rect.top + rect.height / 2
+    if (st.overId === overId && st.before === before) return
+    st.engaged = true
+    st.overId = overId
+    st.before = before
+    setProjDrag({ draggingId: st.id, overId, before })
+  }, [])
+
+  /** 边缘自动滚动帧循环：滚动了才重算跟随/插入点（未滚动的帧不动 DOM）。
+   *  指针停在带内时逐帧滚动，到达列表边界后 autoScrollNearEdge 返回 false，
+   *  循环继续空转等待指针离开——直到松手/取消时取消。 */
+  const tickProjAutoScroll = useCallback(() => {
+    const st = projDragRef.current
+    if (!st?.active) return
+    st.raf = null
+    const scroller = projectsScrollRef.current
+    if (
+      scroller &&
+      autoScrollNearEdge(scroller, st.lastY, {
+        edge: PROJ_DRAG_EDGE_SCROLL_PX,
+        step: PROJ_DRAG_EDGE_SCROLL_STEP_PX,
+      })
+    ) {
+      updateProjDragPosition(st)
+    }
+    st.raf = window.requestAnimationFrame(tickProjAutoScroll)
+  }, [updateProjDragPosition])
+
+  /** 起拖达成：克隆跟随浮层 + 隐藏源卡 + 上浮 class + 触觉反馈。 */
   const activateProjDrag = useCallback((st: ProjDragState) => {
     st.active = true
     // 项目 id 为后端 uuid，不含选择器元字符，属性选择器无需转义
     // （focusProjectCard 的滚动定位同款假设）。
-    draggedElRef.current = document.querySelector<HTMLElement>(`[data-proj-id="${st.id}"]`)
+    const source = document.querySelector<HTMLElement>(`[data-proj-id="${st.id}"]`)
+    // 浮层挂在侧栏根节点（滚动容器的父级，不随列表滚动）；源卡片留在列表里
+    // 但隐藏，保留布局几何供插入点计算与松手后的落位。
+    const layer = projectsScrollRef.current?.parentElement
+    if (source && layer) {
+      const rect = source.getBoundingClientRect()
+      const layerRect = layer.getBoundingClientRect()
+      const ghost = source.cloneNode(true) as HTMLElement
+      ghost.removeAttribute('data-proj-id')
+      ghost.setAttribute('data-drag-ghost', 'true')
+      ghost.setAttribute('aria-hidden', 'true')
+      ghost.classList.add('sidebar-project-lifted')
+      ghost.style.position = 'absolute'
+      ghost.style.left = `${rect.left - layerRect.left}px`
+      ghost.style.top = `${rect.top - layerRect.top}px`
+      ghost.style.width = `${rect.width}px`
+      ghost.style.height = `${rect.height}px`
+      ghost.style.margin = '0'
+      ghost.style.zIndex = '30'
+      ghost.style.pointerEvents = 'none'
+      dragGhostRef.current = ghost
+      dragSourceRef.current = source
+      source.style.visibility = 'hidden'
+      layer.appendChild(ghost)
+    }
     hapticTap()
     setProjDrag({ draggingId: st.id, overId: '', before: true })
-  }, [])
+    st.raf = window.requestAnimationFrame(tickProjAutoScroll)
+  }, [tickProjAutoScroll])
 
   // window 级指针监听：projDragRef 为空时纯读引用即返回，零成本；订阅随
-  // 组件卸载摘除。目标卡片定位优先 elementFromPoint——触摸指针有隐式
-  // capture，e.target 会停在按下处的卡片上命中不了别的卡；jsdom 无布局
-  // （elementFromPoint 未实现）时回退 e.target，测试可直接朝卡片派发。
+  // 组件卸载摘除。拖拽期间同时监听列表滚动（滚轮/滚动条）：滚动不派发
+  // pointermove，不重算会让卡片被内容带走、与指针脱钩。
   useEffect(() => {
-    const cardAtPoint = (x: number, y: number, target: EventTarget | null): HTMLElement | null => {
-      if (typeof document.elementFromPoint === 'function') {
-        const hit = document.elementFromPoint(x, y)?.closest?.('[data-proj-id]')
-        if (hit) return hit as HTMLElement
-      }
-      const el = target as Element | null
-      return (el?.closest?.('[data-proj-id]') as HTMLElement | null) ?? null
-    }
     const clearPending = (st: ProjDragState | null) => {
       if (st?.timer != null) {
         window.clearTimeout(st.timer)
         st.timer = null
       }
     }
+    const stopAutoScroll = (st: ProjDragState | null) => {
+      if (st?.raf != null) {
+        window.cancelAnimationFrame(st.raf)
+        st.raf = null
+      }
+    }
     const onMove = (e: PointerEvent) => {
       const st = projDragRef.current
       if (!st) return
+      st.lastX = e.clientX
+      st.lastY = e.clientY
+      st.lastTarget = e.target
       const dx = e.clientX - st.startX
       const dy = e.clientY - st.startY
       if (!st.active) {
@@ -634,39 +752,20 @@ export function Sidebar() {
         if (dx * dx + dy * dy < PROJ_DRAG_THRESHOLD_PX * PROJ_DRAG_THRESHOLD_PX) return
         activateProjDrag(st)
       }
-      // 跟随指针：transform 直写（见 draggedElRef 注释——不走 React）。
-      // scale(1.02) 是「捏在手里」的放大暗示，与投影/描边同向加强。
-      if (draggedElRef.current) {
-        draggedElRef.current.style.transform = `translate(${dx}px, ${dy}px) scale(1.02)`
-      }
-      // 插入点判定：命中卡是「被拽起卡下方」的那张（拽起卡 pointer-events:none）
-      const card = cardAtPoint(e.clientX, e.clientY, e.target)
-      const overId = card?.dataset.projId
-      if (!overId || overId === st.id) {
-        // 悬停在自己头上 / 移出列表：摘插入点，卡片保持被拽起
-        if (st.overId !== '') {
-          st.overId = ''
-          setProjDrag({ draggingId: st.id, overId: '', before: true })
-        }
-        return
-      }
-      const rect = card.getBoundingClientRect()
-      const before = e.clientY < rect.top + rect.height / 2
-      if (st.overId === overId && st.before === before) return
-      st.engaged = true
-      st.overId = overId
-      st.before = before
-      setProjDrag({ draggingId: st.id, overId, before })
+      updateProjDragPosition(st)
+    }
+    const onScroll = (e: Event) => {
+      const st = projDragRef.current
+      if (!st?.active) return
+      if (e.target !== projectsScrollRef.current) return
+      updateProjDragPosition(st)
     }
     const finish = () => {
       const st = projDragRef.current
       projDragRef.current = null
       clearPending(st)
-      // 跟随 transform 必须手动清：React 不管这个元素的 transform，不清会残留偏移
-      if (draggedElRef.current) {
-        draggedElRef.current.style.transform = ''
-        draggedElRef.current = null
-      }
+      stopAutoScroll(st)
+      clearProjDragDom()
       setProjDrag(null)
       // 只有真的拽到过别的卡片才算一次拖拽：记时间戳抑制补发的 click（浏览器
       // 把 down/up 的公共祖先作为 click 目标，落回原卡片头部时会误触展开切换）。
@@ -679,12 +778,21 @@ export function Sidebar() {
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', finish)
     window.addEventListener('pointercancel', finish)
+    // scroll 不冒泡，用捕获阶段挂在 document 上（容器随侧栏展开/收起重挂，
+    // 挂容器本身会在重挂后失效）。
+    document.addEventListener('scroll', onScroll, true)
     return () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', finish)
       window.removeEventListener('pointercancel', finish)
+      document.removeEventListener('scroll', onScroll, true)
+      stopAutoScroll(projDragRef.current)
     }
-  }, [commitProjectReorder, activateProjDrag])
+  }, [commitProjectReorder, activateProjDrag, updateProjDragPosition, clearProjDragDom])
+
+  // 拖拽中卸载侧栏的兜底收尾：浮层是直接挂到根节点的 DOM，不受 React 管理，
+  // 不主动移除会残留在页面上。
+  useEffect(() => () => clearProjDragDom(), [clearProjDragDom])
 
   const handleProjHeaderPointerDown = useCallback((e: ReactPointerEvent, projectId: string) => {
     if (e.button !== 0) return // 仅左键 / 触摸（触摸 pointerdown 的 button 为 0）
@@ -704,6 +812,10 @@ export function Sidebar() {
       overId: '',
       before: true,
       timer: null,
+      lastX: e.clientX,
+      lastY: e.clientY,
+      lastTarget: e.target,
+      raf: null,
     }
     projDragRef.current = st
     // 触摸才需要长按：手指一滑浏览器就滚列表，立即起拖会和滚动抢手势。

@@ -89,6 +89,11 @@ impl EngineRegistry {
         self.pty.agent_events()
     }
 
+    /// 当前驻留的 pty 会话数（重启影响预检用，见 `/system/restart-preflight`）。
+    pub fn live_pty_session_count(&self) -> usize {
+        self.pty.live_session_count()
+    }
+
     /// pty 会话 attach（WS 层专用）：resolve-or-create + 订阅输出 + 补屏快照。
     pub async fn attach_pty(
         &self,
