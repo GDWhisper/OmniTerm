@@ -126,6 +126,36 @@ describe('DesktopNotificationSection（桌面通知开关）', () => {
     expect(text()).toContain(en['settings.desktopNotificationState.supported'])
   })
 
+  it('权限请求永不结算（浏览器压制弹窗）→ 开关立即翻转，状态行给等待指引', async () => {
+    // 回归：点击的全部可见效果曾押在 `await requestPermission()` 之后——浏览器
+    // 压制权限弹窗时该 promise 不结算（既不负 resolve 也不 reject），用户看到的
+    // 是「点了毫无反应」：开关不翻、状态行不动、意图不记录。
+    MockNotification.requestPermission = vi.fn(
+      () => new Promise<NotificationPermission>(() => {}),
+    )
+    await act(async () => {
+      toggleButton().click()
+    })
+    expect(MockNotification.requestPermission).toHaveBeenCalledTimes(1)
+    expect(useAppStore.getState().desktopNotificationEnabled).toBe(true)
+    expect(text()).toContain(en['settings.desktopNotificationState.requesting'])
+  })
+
+  it('权限请求未结算时开关不被禁用——可关闭再开重试', async () => {
+    // 请求期间若禁用开关，promise 挂起时用户连「关闭再开重试」都被锁死。
+    MockNotification.requestPermission = vi.fn(
+      () => new Promise<NotificationPermission>(() => {}),
+    )
+    await act(async () => {
+      toggleButton().click()
+    })
+    expect(toggleButton().disabled).toBe(false)
+    await act(async () => {
+      toggleButton().click()
+    })
+    expect(useAppStore.getState().desktopNotificationEnabled).toBe(false)
+  })
+
   it('权限被拒时开关仍记为用户意图，但状态行如实显示「已拒绝」', async () => {
     MockNotification.permission = 'denied'
     MockNotification.requestPermission = vi.fn(async () => 'denied' as NotificationPermission)

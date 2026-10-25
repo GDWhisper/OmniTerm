@@ -183,6 +183,7 @@
   "settings.desktopNotificationHint": "智能体回合结束、出错或需要你审批时弹出系统通知；通知只含会话名与事件类型，不含回复正文",
   "settings.desktopNotificationState.supported": "已授权：桌面通知会正常弹出",
   "settings.desktopNotificationState.default": "尚未授权：开启开关时浏览器会弹出权限询问",
+  "settings.desktopNotificationState.requesting": "正在等待浏览器权限询问：请在弹出框中点击「允许」。若浏览器没有弹出询问（弹窗拦截或隐私模式可能压制权限框），请在地址栏左侧的站点设置里手动允许通知，然后关闭再打开一次开关",
   "settings.desktopNotificationState.denied": "浏览器已拒绝通知权限：当前不会弹出桌面通知",
   "settings.desktopNotificationState.insecure": "当前以 http 访问非本机地址：浏览器只在安全上下文（HTTPS 或本机地址）提供桌面通知",
   "settings.desktopNotificationState.unsupported": "当前浏览器不提供桌面通知",
