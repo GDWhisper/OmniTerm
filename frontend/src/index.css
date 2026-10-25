@@ -2488,6 +2488,53 @@ input[type="range"]:active::-webkit-slider-thumb {
   animation: chat-msg-row-flash 1.5s ease-out forwards;
 }
 
+/* ── 聊天面板顶部错误条 ────────────────────────────────────────
+   一次性错误（发送失败 / 配置项设置失败 / 帧错误）在会话内没有天然收尾事件，
+   必须给显式关闭出口，否则会一直占住消息区上方直到用户下一次发送。 */
+.chat-error-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  background: var(--danger-12);
+  color: var(--danger);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.chat-error-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+  cursor: text;
+}
+
+.chat-error-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  margin-top: -2px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.chat-error-dismiss:hover,
+.chat-error-dismiss:focus-visible {
+  opacity: 1;
+  border-color: currentColor;
+}
+
 /* ── 聊天面板内的会话内搜索（F06）─────────────────────────────
    浮层本体走 .pixel-float（2px 边框 + 4px 硬阴影，§6.1）；本块只管布局与控件态。
    位置：聊天面板根容器右上角（绝对定位），延迟展开——不占布局、不遮消息主体。

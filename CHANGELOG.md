@@ -59,6 +59,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-10-25 00:20) `[frontend]` 聊天面板顶部错误条新增 ✕ 关闭按钮：配置项设置失败、帧解析失败等一次性错误此前没有收尾事件，只能等下一次发送或重连才消失，会一直占住消息区上方（`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/index.css`）
 - (2026-10-24 01:52) `[frontend]` 侧栏项目卡片拖拽不再因滚动脱钩：跟随视觉改为挂在侧栏根节点的克隆浮层（源卡隐藏保留布局），滚动列表（滚轮/滚动条）时卡片固定在指针下；浮层脱离滚动内容，也避免了 transform 溢出把 `scrollHeight` 越滚越大（因此不会滚进空白、滚动条拇指不再随拖拽缩水）。拖到列表上/下边界时自动滚动（48px 触发带、每帧 10px，到真实边界即停），判定抽到 `frontend/src/utils/edgeAutoScroll.ts` 与 FileManager 拖拽共用（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/FileManager/useFileDrag.ts`）
 - (2026-10-22 12:15) `[frontend]` 聊天区上拉加载更早历史不再连锁翻页：前插补偿抬高滚动位置后会立即再触发一次加载、连续翻页直到历史耗尽；改为带滞后锁（用户确实向上滚过才解锁），且触发窗口按视口比例（1.5 屏）计算、短会话仍可上拉加载（`frontend/src/components/Chat/ChatView.tsx`）
 

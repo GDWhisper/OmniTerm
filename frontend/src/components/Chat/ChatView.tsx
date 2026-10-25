@@ -1098,17 +1098,21 @@ export function ChatView() {
       >
 
       {chatState.error && (
-        <div
-          style={{
-            flexShrink: 0,
-            padding: '6px 12px',
-            background: 'rgba(255, 123, 114, 0.12)',
-            color: 'var(--danger, #FF7B72)',
-            fontSize: 12,
-            borderBottom: '1px solid var(--border-subtle)',
-          }}
-        >
-          {chatState.error}
+        <div className="chat-error-bar">
+          <span className="chat-error-text">{chatState.error}</span>
+          {/* 错误多为一次性事件（配置项设置失败 / 帧解析失败），没有后续事件替它
+              收尾时会常驻占位；给显式关闭出口，不强迫用户靠发消息清掉。 */}
+          <button
+            type="button"
+            className="chat-error-dismiss"
+            onClick={() => {
+              if (activeSessionId) useChatStore.getState().setError(activeSessionId, null)
+            }}
+            title={t('toast.dismiss')}
+            aria-label={t('toast.dismiss')}
+          >
+            ✕
+          </button>
         </div>
       )}
 
