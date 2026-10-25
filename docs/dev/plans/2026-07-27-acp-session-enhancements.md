@@ -1,6 +1,6 @@
 # ACP 会话功能增强计划
 
-> 状态：**P0/P1 主体已完成** — F01/F02/F03/F04 Phase A 已落地（2026-07-27）；F09 被后续计划重做（agent 侧标题回填，见 `2026-10-16-session-title-backfill.md`）；**F05/F06/F07/F08 于 2026-10-21 拆为四份独立计划**（见下表），本文不再承载其实施——其中 **F06（会话内搜索）、F07（桌面通知）与 F08（Markdown 导出）已于 2026-10-21 实施完毕**，F05 仍是设计稿
+> 状态：**P0/P1 主体已完成** — F01/F02/F03/F04 Phase A 已落地（2026-07-27）；F09 被后续计划重做（agent 侧标题回填，见 `2026-10-16-session-title-backfill.md`）；**F05/F06/F07/F08 于 2026-10-21 拆为四份独立计划**（见下表），本文不再承载其实施——其中 **F06（会话内搜索）、F07（桌面通知）与 F08（Markdown 导出）已于 2026-10-21 实施完毕**，F05 已于 2026-10-25 评估后**搁置**（backlog，结论见该文 §0）
 > 触发条件：2026-07-27 功能审查，对比业界主流产品（Cursor / Cline / Aider / Copilot Chat / Claude Code）识别出高中优先级缺口
 > 关联：`docs/dev/plans/archive/2026-07-20-acp-quality-gap.md`（测试基建）、`docs/architecture/frontend-patterns.md`（新组件模式）
 >
@@ -8,7 +8,7 @@
 >
 > | 原编号 | 功能 | 去向 |
 > |---|---|---|
-> | F05 | 检查点 / 回滚 | **重做**：`docs/dev/plans/2026-10-21-acp-turn-checkpoint-rollback.md`（原 §3.5 的 git 语义与触发时机均不成立，见该文 §1 + 本文 §3.5 勘误） |
+> | F05 | 检查点 / 回滚 | **重做后搁置**：`docs/dev/plans/backlog/2026-10-21-acp-turn-checkpoint-rollback.md`（原 §3.5 的 git 语义与触发时机均不成立，见该文 §1 + 本文 §3.5 勘误；**2026-10-25 评估搁置**——非多此一举但非刚需，重启条件见该文 §0） |
 > | F06 | 会话内搜索 | `docs/dev/plans/archive/2026-10-21-acp-chat-fulltext-search.md`（**2026-10-21 已实施**） |
 > | F07 | 浏览器桌面通知 | `docs/dev/plans/archive/2026-10-21-browser-desktop-notification.md`（**2026-10-21 已实施**） |
 > | F08 | 会话导出 Markdown | `docs/dev/plans/archive/2026-10-21-acp-session-markdown-export.md`（**2026-10-21 已实施**） |
@@ -120,7 +120,7 @@ ACP 协议无"编辑历史消息"概念，实际语义：
 > | 「session 级检查点列表存内存」 | 内存态在后端重启 / 多标签页 / 「释放会话后想回滚」三种场景下直接失效 → 重做方案改为**落库** |
 > | 「session 释放时检查点列表丢弃」 | release 只断 agent 进程、**文件还在**；此时丢弃 = 用户失去回滚能力 → 重做方案改为**释放时保留、删除会话时清理** |
 >
-> 重做方案（turn 边界快照 + `git restore --source` 回滚 + ref 锚定）：`docs/dev/plans/2026-10-21-acp-turn-checkpoint-rollback.md`
+> 重做方案（turn 边界快照 + `git restore --source` 回滚 + ref 锚定）：`docs/dev/plans/backlog/2026-10-21-acp-turn-checkpoint-rollback.md`（2026-10-25 评估搁置，见该文 §0）
 
 - **触发时机**：WS handler 收到 `ToolCall` / `ToolCallUpdate`（kind = write / edit / delete）时，在执行前调用 `git stash create`（不修改工作区，只生成 commit hash）
 - **存储**：session 级检查点列表存内存（`Vec<Checkpoint>`），含 timestamp + stash hash + 触发工具描述

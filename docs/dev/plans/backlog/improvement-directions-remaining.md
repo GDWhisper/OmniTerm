@@ -9,6 +9,7 @@
 > 2026-10-21 更新（晚晚）：X01 的**浏览器通道已实施**（计划 `2026-10-21-browser-desktop-notification.md`），X01 剩余缺口收敛为 webhook（依赖 X11）/ pty 侧静默判定 / 通知点击跳转。
 > 2026-10-21 更新：X01 / X02 各拆出独立实施计划（见下方两行「(2026-10-21)」条目）；X02 的「中文分词」取舍经实测已被推翻（改用 LIKE + 扫描预算）。本次拆分源自 `docs/dev/plans/2026-07-27-acp-session-enhancements.md` 的 F05–F08 收敛。
 > 2026-10-25 更新：新增 X19（前端轮询矩阵收敛）/ X20（WS 集成测试脚手架）——自 `archive/2026-10-10-acp-resume-jank-followups.md` 归档移交（该计划 ⑤⑧ 两项 P2 未随批实施）。
+> 2026-10-25 更新（晚）：F05（检查点/回滚）经评估**搁置**——计划移至 `backlog/2026-10-21-acp-turn-checkpoint-rollback.md`。结论：git 救不了未提交中间态（reflog 不记工作区内容），故非多此一举；但 agent 原生 rewind 在普及（Claude Code `/rewind` 连对话上下文一起回，本方案只还原磁盘且有「agent 记忆与磁盘失配」未处理缺口）、整轮回滚低频、维护面大（refs 入用户仓库 + DB + 对账 + UI）、requirements.md 无此条目。重启条件与完整理由见该文 §0。
 
 ## 跟踪表
 
