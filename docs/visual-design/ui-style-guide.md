@@ -542,7 +542,7 @@ Variant classes: `.toast-error` (danger border/text), `.toast-warning` (warning)
 | hover 滚动 | `.session-name-text` 在行 hover 时往返滚动：`translateX(0)` → `-溢出距离` → `0`，两端各留约 8% 停留；速度按 25px/s 估算，时长钳制在 6–24s。`prefers-reduced-motion: reduce` 下关闭动画（渐隐保留） |
 | 时间槽 `.session-age` | 固定 44px，右对齐，12px `--text-faint`，`tabular-nums`；文案走 `relativeAgeParts`（刚刚 / N分 / N小时 / N天 / N个月 / N年） |
 | 时间来源 | `last_turn_at ?? created_at`：ACP 取最近一次 turn 定稿；从未有过 turn 或终端会话回退到创建时刻 |
-| 动作槽 `.session-actions` | **绝对定位**在时间槽上（`right:6px`，宽度 `n×20px + (n-1)×6px`），空闲不占布局；隐藏态 `pointer-events:none`，避免透明按钮拦截标题点击；`background-color: inherit` 在淡入时遮住正在淡出的时间 |
+| 动作槽 `.session-actions` | **绝对定位**在时间槽上（`right:6px`，宽度 `n×20px + (n-1)×6px`），空闲不占布局；隐藏态 `pointer-events:none`，避免透明按钮拦截标题点击；`background-color` **仅在 hover / focus 可见态设为 `inherit`**（遮住正在淡出的时间），空闲必须透明——否则聚焦（active）行的不透明行背景会把这个槽下面的时间盖住 |
 | 让位行为 | `hover` / `focus-within` / `pointer:coarse` 时：时间槽宽度扩到 `max(44px, 动作按钮宽度)` 并让 `.session-age` 淡出，动作按钮淡入。标题因此获得准确的可视宽度，渐隐边缘落在按钮左侧 |
 | 聚焦态 | `.active` **不再常显动作按钮**（2026-10-25 用户要求）：聚焦行与普通行一样由 hover / focus-within 触发，空闲时显示时间；触屏例外见下行 |
 | 触屏 | 没有 hover，动作按钮恒显，时间槽恒为按钮宽度且时间隐藏；标题仅渐隐、不滚动 |

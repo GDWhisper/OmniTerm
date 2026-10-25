@@ -1512,6 +1512,7 @@ body.fm-dragging * {
     opacity: 0;
   }
   .sidebar-session-item.has-actions .session-actions {
+    background-color: inherit;
     pointer-events: auto;
   }
 }
@@ -1597,7 +1598,7 @@ body.fm-dragging * {
   justify-content: flex-end;
   gap: var(--session-gap);
   width: var(--session-actions-width);
-  background-color: inherit; /* 淡入时遮住底下正在淡出的时间 */
+  background-color: transparent;
   pointer-events: none; /* 隐藏态不得拦截标题/时间的点击 */
 }
 
@@ -1609,6 +1610,9 @@ body.fm-dragging * {
 
 .sidebar-session-item.has-actions:hover .session-actions,
 .sidebar-session-item.has-actions:focus-within .session-actions {
+  /* 只在按钮可见态继承行背景：空闲时若也继承，active 行的不透明背景
+     会把这个绝对定位槽下面的时间盖住。 */
+  background-color: inherit;
   pointer-events: auto;
 }
 
