@@ -1,6 +1,6 @@
 # 端口转发反向代理：`/proxy/{port}/{*path}`
 
-> 状态：**P1-P3 已实施（2026-08-14）**；**D1 翻盘触发——子域名方案 `{port}.{base}` 已实施（2026-08-14，见 §D1 翻盘）**；P4 安全加固（settings 表白名单 + UI 开关 + 按 session 授权 + 审计日志）留待后续，产出模糊且验收标准未覆盖，实施边界需另行确认
+> 状态：**P1-P3 已实施（2026-08-14）**；**D1 翻盘触发——子域名方案 `{port}.{base}` 已实施（2026-08-14，见 §D1 翻盘）**；**P4 核心已实施（2026-10-26）：全局开关 + 端口策略/放行清单 + 拒绝/配置审计 + 设置页 UI，见文末「P4 实施记录」**；**按 session 授权未实施**（原计划标注「可选」；当前代理请求没有可用的会话身份，重启条件见实施记录）
 > 触发条件：修改 `src/proxy/`、`src/api/mod.rs`（路由挂载）、`src/main.rs`（`AppState`）、`frontend/vite.config.ts`（代理）、`frontend/src/utils/proxyUrl.ts`、终端/聊天链接重写逻辑中任一项前必读
 > 关联：`docs/architecture/backend.md`、`docs/architecture/frontend.md`、`docs/reference/auth-not-enforced.md`（鉴权挂载）、`docs/dev/performance-and-safety.md` §P1/§P4（有界缓冲 / 外部输入速率）、`docs/reference/references.md`（code-server `proxy.ts` / jupyter-server-proxy 参考实现）
 
@@ -37,7 +37,7 @@
 | P1 | HTTP 反向代理 | 路由 + handler + header 重写 + 端口白名单 + 流式转发 + 单测 | 覆盖约 80% 场景（静态下载、REST、SSE） |
 | P2 | WebSocket relay | `tokio-tungstenite` 双向 relay + 有界队列 | Vite HMR 等依赖 WS 的 dev server |
 | P3 | 前端入口 + 链接重写 | `proxyUrl.ts` + Chat `<a>` 拦截 + xterm `WebLinksAddon` handler | 端到端体验 |
-| P4 | 安全加固 | 白名单提为 settings 表 + UI、按 session 授权、审计日志 | 公网部署 |
+| P4 | 安全加固 | ✅ 核心已实施（2026-10-26）：全局开关 + 端口策略/放行清单 + 拒绝/配置审计 + 设置页 UI；按 session 授权未实施（见实施记录） | 公网部署 |
 
 **P1 → P2 顺序强制**：HTTP 转发是 WS relay 的地基（同一路由分流）。P3/P4 相对独立。
 
@@ -77,11 +77,11 @@
 1. 常量表：数据库/内部服务端口——`3306`(MySQL)、`5432`(PostgreSQL)、`6379`(Redis)、`27017`(MongoDB)、`11211`(memcached)、`8500-8503`(Consul)、`9200-9300`(ES)。（这些都在 3000+ 段内，必须显式封。）
 2. **运行时动态排除 OmniTerm 自身监听端口**（`args.port`，生产 9077 / preview 9075 / dev 9777）——防 `/proxy/{port}` 回环打 OmniTerm 自己造成无限转发。自身端口经 `AppState` 注入 proxy 模块。
 
-**鉴权**：路由挂 `require_auth_mw`（auth 开启时）。auth 关闭 + 非回环监听时，依赖 `main.rs` 既有启动告警（`src/main.rs:760-768`），proxy 不额外处理。
+**鉴权**：路由挂 `require_auth_mw`（auth 开启时）。auth 关闭 + 非回环监听时，由 2026-09-26 起的 `enforce_listen_auth` 直接拒绝启动（显式逃生门 `--insecure-no-auth`），proxy 不额外处理。
 
 **cookie 隔离**：请求转发时**剥离 OmniTerm 自己的 `omniterm_token`**（JWT 绝不泄漏给目标服务，S3/S4）。
 
-**否决项**：默认全封、用户逐端口显式放行——更安全但多一步操作，与「本地开发工具」定位不符。留作 P4 可选项。
+**P4 落地（2026-10-26）**：保持「默认安全范围」为默认（不翻盘为默认全封），另提供 `allowlist` 严格模式 + 全局开关。硬边界（127.0.0.1、3000 下限、黑名单表/段、自身端口）是**不可配置的地板**，settings 只能进一步收窄；详见文末实施记录。
 
 ### D3：嵌入形态 —— MVP 新标签页
 
@@ -191,11 +191,13 @@
 
 **依赖关系**：依赖 Phase 1/2 后端就绪。
 
-### Phase 4 — 安全加固
+### Phase 4 — 安全加固（核心已实施 2026-10-26）
 
-**产出**：白名单提为 settings 表 + UI 开关；按 session 授权（可选）；审计日志（S3：不落敏感 header/body）。
+**产出**：`settings` 表三键（`proxy_enabled` / `proxy_port_mode` / `proxy_allowed_ports`）+ `GET/PUT /settings/proxy` + 设置页 `ProxySection`；端口策略运行时热更新；拒绝/配置变更审计；子域名 WS 收编进 `dispatch_proxy`。
 
-**改动文件**：`src/proxy/`（读 settings 表）、`src/api/settings.rs`（新增 proxy 开关端点）、前端 Settings 页。
+**不纳入**：按 session 授权（原「可选」项）。当前 JWT 单账号、`require_auth_mw` 不保留 claims、代理路径/子域不携带 session；实现需新增授权表 + 凭证传输（WS 不能自定义 header）+ 全入口覆盖 + 防泄漏，单人模型下收益低。**重启条件**：出现多账号或按会话隔离暴露的真实需求、且鉴权层能提供经过校验的稳定 session 身份时另立计划。
+
+**改动文件**：`src/proxy/mod.rs`、`src/api/settings.rs`、`src/api/audit.rs`、`src/api/system.rs`、`src/main.rs`、`src/test_utils.rs`、`frontend/src/components/Settings/ProxySection.tsx`、`frontend/src/api/client.ts`、`frontend/src/utils/proxyUrl.ts`、`frontend/src/App.tsx`、中英文 locale。
 
 **依赖关系**：依赖 Phase 1。
 
@@ -225,6 +227,17 @@
 - [ ] 终端里点 `localhost:3000` 链接 → 同样重写（若 `WebLinksAddon` 支持 handler）。
 - [ ] `tsc` strict 零新增错误。
 
+**Phase 4（P4 核心，2026-10-26）**：
+- [x] `GET /settings/proxy` 无记录时返回 `{enabled:true, mode:"default", allowed_ports:[]}`，代理行为与 P1–P3 一致。
+- [x] `PUT /settings/proxy` 校验 mode 白名单、清单 ≤64 条、硬边界（<3000 / 黑名单 / 黑名单段 / 自身端口）→ 400，且 DB/内存不变。
+- [x] 合法 PUT 立即生效（路径前缀 HTTP/WS + 子域名 HTTP/WS）；三 key 事务写入；相同值 no-op 不审计。
+- [x] `allowlist` 仅放行清单内端口；空清单全拒；黑名单/自身端口无法通过清单放行。
+- [x] 关闭开关后所有代理入口 403；`/system/info` 的 `proxy_enabled=false`，前端停止重写 localhost 链接。
+- [x] 子域名 WS 受开关/清单约束，并写 `proxy_access`；未认证子域名请求先 401（不暴露策略）。
+- [x] 认证态拒绝写 `proxy_denied`（`(port, reason)` 去重、上限 256）；auth 关闭不写拒绝审计；配置变更写 `proxy_settings_changed`。
+- [x] 设置页 AUTH 分类出现代理分区；开关/模式/清单可保存；空清单警告与 400 内联错误可见。
+- [x] 后端/前端测试、clippy、tsc、lint、双语文案检查通过。
+
 **边界与降级**：
 - [ ] 目标端口无服务（连接拒绝）→ 502，前端有可读提示。
 - [ ] 目标响应超时 → 504。
@@ -253,6 +266,38 @@
 - `CHANGELOG.md`：新增功能条目（「新增 localhost 端口转发反向代理」）。
 - `AGENTS.md` 文档索引：本计划登记行（触发条件指向 `src/proxy/` 等）。
 - `docs/dev/debug-guide.md`：按需补「代理链路排查」模式（502/504/绝对路径 404 定位）。
+
+---
+
+## P4 实施记录（2026-10-26）
+
+### 实施范围
+
+- **settings 三键**：`proxy_enabled`（默认 `"1"`，缺失/脏值按开启）、`proxy_port_mode`（`default`/`allowlist`，缺失/脏值回退 `default`）、`proxy_allowed_ports`（JSON 数组，最多 `MAX_PROXY_ALLOWED_PORTS=64`）。
+- **API**：`GET/PUT /api/v1/settings/proxy`（受保护路由组），线格式 `{enabled, mode, allowed_ports}`；GET 返回内存中的**生效策略**，PUT 严格校验（mode 白名单、清单上限、硬边界）→ 事务写三 key → 热替换 `ProxyState.policy` → 审计；相同值 no-op。
+- **策略语义**：`default` = 现有安全范围；`allowlist` = 仅清单内端口，空清单一律拒绝。硬边界（127.0.0.1、3000 下限、黑名单/黑名单段、自身端口）是地板，settings 只能收窄。
+- **入口**：`dispatch_proxy` 成为策略/首访审计/WS Origin 的唯一关卡；路径前缀 HTTP/WS 与子域名 HTTP/WS 全部经它。子域名中间件只做 Host 解析 → **鉴权** → URI 归一化 → 提取 WS upgrade → dispatch。
+- **审计**：新增 `proxy_denied`（仅 auth 开启、按 `(port, reason)` 首见去重、上限 256）与 `proxy_settings_changed`（成功且非 no-op，target=`proxy`，detail 记 enabled/mode/ports）；`proxy_access` 语义不变，子域名 WS 现在也计入。
+- **前端**：AUTH 设置页新增 `ProxySection`（开关/模式/清单，显式保存、内联错误）；`/system/info` 增加 `proxy_enabled`，`proxyUrl` 据此门控链接重写；审计页新增两个动作文案。
+- **共享助手**：`api/settings.rs` 的 `get_setting` / `upsert_settings`（事务）/ `delete_setting` 成为 settings 读写单一真源；`main.rs` 启动读取已迁移。
+
+### 勘误（勿回退）
+
+1. **没有翻盘为默认全封**：P4 的「白名单提为 settings」实现为「保留现有安全范围为默认 + 可选严格 allowlist」。默认全封会改变既有部署行为，且与本地开发工具定位冲突（D2 原否决理由仍成立）。
+2. **子域名 WS 收编**：此前 `proxy_host_mw` 的 WS 分支直连 `ws::relay`，绕过端口策略、首访审计与 Origin 校验。现已统一到 `dispatch_proxy`；不要再为「少一次端口检查」恢复直连。
+3. **鉴权先于策略**：子域名入口先 `verify_request` 再进 dispatch；未认证统一 401。若改回策略优先，会重新引入「403/401 差异可探测端口策略」。
+4. **`proxy_denied` 是第二个失败类审计例外**：必须同时满足「仅 auth 开启 + `(port, reason)` 去重 + 256 上限」；缺任一条都可被匿名/探测流量冲掉 1000 行台账（与 `auth_rate_limited` 同理）。
+5. **GET 读内存而非 DB**：内存快照是当前生效策略；DB 是启动期真相源。不要在代理热路径或 GET 上逐请求查 settings。
+
+### 未实施：按 session 授权
+
+原计划标注「可选」，本次明确不实施。当前架构没有代理请求可用的 session 身份：JWT 是单账号、`require_auth_mw` 丢弃 claims、代理路径/子域不携带 session；实现需新增授权表 + 凭证传输（WS 无法自定义 header，需 cookie/query）+ 双入口覆盖 + 凭证剥离防泄漏，单账号模型下收益低。**重启条件**：出现多账号或按会话隔离暴露的真实需求，且鉴权层能提供经过校验的稳定 session 身份时另立计划。
+
+### 验证
+
+- 后端：`cargo test` 相关用例（策略判定/宽容加载/拒绝去重/子域名中间件/API roundtrip）通过；`cargo clippy --workspace --all-targets -- -D warnings` 零告警。
+- 前端：`tsc -b`、`lint`、`vitest run` 全绿（新增 ProxySection / proxyUrl 用例）。
+- 手动（dev 实例）：默认 `/proxy/3000/` 200；PUT allowlist `[5173]` 后 3000→403、5173→200；关闭开关后 403 且 `/system/info` `proxy_enabled=false`；自身端口 PUT→400；审计出现 `proxy_settings_changed` / `proxy_denied` / `proxy_access`；浏览器设置页保存/切换/恢复默认均正常。
 
 ---
 

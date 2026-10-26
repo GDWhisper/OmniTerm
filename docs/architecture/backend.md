@@ -29,7 +29,7 @@ src/
 │   ├── agents.rs         # CRUD /api/v1/agents (ACP-capable agent process configs)
 │   ├── sessions.rs       # CRUD /api/v1/sessions — dispatches on runtime_kind: 'tmux' (TmuxEngine) | 'pty' (PtyEngine, lazy spawn) | 'acp' (spawns AcpClient via supervisor)
 │   ├── hooks.rs          # GET /sessions/{id}/hook-status, POST hook-enable|hook-disable
-│   ├── settings.rs       # GET/PUT /api/v1/settings/acp-idle-recycle — ACP 空闲回收阈值（分钟，settings 表持久化 + 内存热更新）；GET/PUT /api/v1/settings/permission-timeout — 权限请求超时模式 + 秒（0=「总是」档）；GET /api/v1/settings/audit-log — 安全审计日志只读入口（受保护；?limit= 收敛，见「安全审计日志（S5）」）
+│   ├── settings.rs       # GET/PUT /api/v1/settings/acp-idle-recycle — ACP 空闲回收阈值（分钟，settings 表持久化 + 内存热更新）；GET/PUT /api/v1/settings/permission-timeout — 权限请求超时模式 + 秒（0=「总是」档）；GET/PUT /api/v1/settings/proxy — 端口转发代理开关/端口模式/放行清单（P4）；GET /api/v1/settings/audit-log — 安全审计日志只读入口（受保护；?limit= 收敛，见「安全审计日志（S5）」）；另含 settings 读取/事务写入共享助手
 │   ├── ai_commit.rs      # GET/PUT /api/v1/settings/ai-commit + POST /settings/ai-commit/models — AI 提交配置、0600 key 文件、模型列表（OpenAI/Anthropic）
 │   ├── audit.rs          # 安全审计日志（S5）：敏感操作的写入收敛点 audit::record + 滚动有界（MAX_AUDIT_ROWS/MAX_AUDIT_DETAIL_BYTES）+ 只读入口 list_recent；表结构见「安全审计日志（S5）」
 │   ├── files.rs          # /api/v1/files — list/upload/download/read/write/mkdir/delete/rename/move/copy/search
@@ -40,8 +40,8 @@ src/
 ├── auth/local_access.rs  # 本地免密判据（D3）：is_local_request 四条件纯函数 + is_loopback_host（与 main.rs::enforce_listen_auth 收敛共用）
 ├── models/               # SQLx-derived structs: User, Project, Session, Agent
 ├── native_picker/        # 系统原生目录选择器（新建项目路径）：Windows PowerShell / macOS osascript / Linux zenity|kdialog；单飞锁 + 10 分钟超时 + 有界输出，见「原生目录选择器」
-├── proxy/                # 端口转发反向代理：路径前缀 /proxy/{port}/{*path} + 子域名 {port}.{base}（P1 HTTP 转发 + P2 WS relay）
-│   ├── mod.rs            # ProxyState（reqwest client + self_port + base_host）、routes、proxy_handler（WS/HTTP 分流）、proxy_host_mw（子域名 Host 路由）、parse_proxy_host、端口白名单、header 重写纯函数 + 单测
+├── proxy/                # 端口转发反向代理：路径前缀 /proxy/{port}/{*path} + 子域名 {port}.{base}（P1 HTTP + P2 WS + P4 运行时策略/审计）
+│   ├── mod.rs            # ProxyState（reqwest client + self_port + base_host + policy 快照 + 首访/拒绝登记）、routes、dispatch_proxy（策略/审计/Origin 唯一关卡，HTTP+WS 与两种入口共用）、proxy_host_mw（子域名 Host 路由 → 鉴权 → 归一化 URI → dispatch）、parse_proxy_host、端口白名单、ProxyPolicy、header 重写纯函数 + 单测
 │   └── ws.rs             # WS 双向 relay：connect_async 上游 + 四任务双向 + mpsc(64) 有界队列
 ├── engine/               # 会话引擎抽象层（D9）：SessionEngine trait + EngineRegistry 按 runtime_kind 路由
 │   ├── mod.rs            # SessionEngine trait / EngineRegistry / EngineSessionInfo / WatchTarget / WS attach 分发
@@ -313,6 +313,8 @@ GET  /api/v1/settings/acp-idle-recycle  # 读 ACP 空闲回收阈值（分钟；
 PUT  /api/v1/settings/acp-idle-recycle  # 写 ACP 空闲回收阈值（分钟，值域 1..=60，越界 400）——受保护
 GET  /api/v1/settings/permission-timeout  # 读权限请求超时配置 {mode, seconds}（无记录/非法回退 abort + 1800s；兼容旧分钟 key）——受保护
 PUT  /api/v1/settings/permission-timeout  # 写权限请求超时配置（mode 白名单 abort/auto/wait；seconds 0=「总是」或 30 秒倍数 ≤3600，越界 400；upsert 两 key + 清旧 key + 热更新）——受保护
+GET  /api/v1/settings/proxy               # 读代理安全配置 {enabled, mode, allowed_ports}（返回内存中的生效策略；默认 true/default/[]）——受保护
+PUT  /api/v1/settings/proxy               # 写代理安全配置（mode 白名单 default/allowlist；清单 ≤64 条、须过硬边界；事务落库 + 热更新 + 配置变更审计；相同值 no-op）——受保护
 GET  /api/v1/settings/audit-log           # 读安全审计日志最近 N 条（新→旧）——受保护；`?limit=` 收敛而非拒绝：缺省 50、硬顶 200、非正数收敛为 1；见「安全审计日志（S5）」
 GET  /api/v1/settings/ai-commit          # 读 AI commit 配置 {provider, base_url, model, has_api_key}（永不返回 key）——受保护
 PUT  /api/v1/settings/ai-commit          # 写配置；api_key 只写入 0600 文件，clear_api_key 删除；提前校验 provider/base_url/model——受保护
@@ -360,7 +362,7 @@ WS   /api/v1/ws/terminal/{session_id}  # tmux-backed pane
 WS   /api/v1/ws/acp/{session_id}       # ACP session update stream + prompt/cancel commands
 WS   /api/v1/ws/terminal/external/{tmux_name}  # 外部（未收养）会话接管；无需 DB 记录
 GET  /api/v1/files/watch (SSE)   # 实时目录变更推送；watch 树**手动递归注册**（跳过 node_modules/.git/target/隐藏目录，见「File watcher」小节）
-GET  /api/v1/system/info              # home_dir + multiplexer（unix="tmux" / windows="psmux"，编译期 cfg 确定，前端展示用）
+GET  /api/v1/system/info              # home_dir + multiplexer（unix="tmux" / windows="psmux"，编译期 cfg 确定，前端展示用）+ proxy_domain（子域名代理 base，null=未启用）+ proxy_enabled（代理全局开关，P4）
 GET  /api/v1/system/dirs?path=<abs>   # 目录浏览弹窗：服务端只返回目录并套 MAX_LIST_ENTRIES，响应 {files,total,truncated}（前端仍做前缀过滤）
 POST /api/v1/system/pick-directory    # 调起运行 OmniTerm 的机器上的系统目录选择器（受保护 + is_local_request 本机限定）
                                       # body {initial_dir?}（不存在时回溯到最近存在的祖先目录）；
@@ -432,9 +434,9 @@ P2 低成本项（2026-10-20，同一计划「P2 候补」）：`/git/log` 支�
 | 外部会话接管 WS | `src/ws/terminal.rs::ws_external_terminal_handler` | 同上（此入口无需 DB 记录，风险更高） |
 | ACP WS | `src/ws/acp.rs::ws_acp_handler` | 同上（可驱动 agent 执行任意 prompt） |
 | 代理 WS relay（路径前缀 `/proxy/{port}`） | `src/proxy/mod.rs::dispatch_proxy` | 因需先判 WS 再分流，沿用 let-chain 调 `crate::ws::origin_matches_host` |
-| 代理 WS relay（子域名 `{port}.{base_host}`） | `src/proxy/mod.rs::proxy_host_mw` | 该分支**绕过** `dispatch_proxy`，故在分支内单独调 `enforce_ws_origin(&parts.headers)` |
+| 代理 WS relay（子域名 `{port}.{base_host}`） | `src/proxy/mod.rs::proxy_host_mw` → `dispatch_proxy` | 中间件只做 Host 解析/鉴权/URI 归一化；WS 分支与路径前缀共用 `dispatch_proxy` 内同一判据（2026-10-26 P4 起不再直连 relay） |
 
-> **收敛教训（2026-09-26 独立审查捕获）**：前四个入口收敛后曾宣称「四入口已全覆盖」，但子域名分支因绕过 `dispatch_proxy` 而遗漏——**判据共享 ≠ 调用点覆盖**。同一份加固要在**每条**到达 `on_upgrade`/`relay` 的路径上逐一确认调用点，不能因函数入了共享模块就认为调用面已闭环。
+> **收敛教训（2026-09-26 独立审查捕获）**：前四个入口收敛后曾宣称「四入口已全覆盖」，但子域名分支因绕过 `dispatch_proxy` 而遗漏——**判据共享 ≠ 调用点覆盖**。同一份加固要在**每条**到达 `on_upgrade`/`relay` 的路径上逐一确认调用点，不能因函数入了共享模块就认为调用面已闭环。**2026-10-26（P4）已把子域名 WS 收编进 `dispatch_proxy`**，代理两条路径现在共用同一调用点；教训保留作为改动其他入口时的检查项。
 
 规则：**Origin 的 host（忽略端口）与请求 Host（忽略端口）不一致 → `403 origin not allowed`**（大小写不敏感）。畸形 Origin（无 scheme / 空 host 段）= 拒绝，**不因解析失败而放行**。两条显式放行：**无 `Origin`**——浏览器对 WS 握手必带 Origin，无 Origin 即非浏览器客户端；一律拒绝会打死 `scripts/pty-*-regression.mjs`、`tests/agent_hook_integration.rs` 的裸握手回归与移动端调试工具。**无 `Host`**——HTTP/1.1 规定必带，缺失即非浏览器流量。
 
@@ -510,6 +512,8 @@ files 侧 scope 记 **id 而非路径**：worktree 会移动、session cwd 会�
 | git push | `api/git.rs::git_push` | `git_push` | `repo:<root>` |
 | agent 增/改/删 | `api/agents.rs` 三个 handler | `agent_create` / `agent_update` / `agent_delete` | `agents` |
 | 代理端口首访 | `proxy/mod.rs::dispatch_proxy` | `proxy_access` | `proxy_port:<port>` |
+| 代理请求拒绝 | `proxy/mod.rs::dispatch_proxy`（策略拒绝分支） | `proxy_denied` | `proxy_port:<port>`；仅 auth 开启时写，按 `(port, reason)` 首见去重、上限 256 |
+| 代理配置变更 | `api/settings.rs::set_proxy_settings` | `proxy_settings_changed` | 无（target=`proxy`，detail 记 enabled/mode/allowed_ports；相同值 no-op 不记） |
 | 登录成功 | `api/auth.rs::login` | `auth_login` | 无（target = 账号名） |
 | 设置密码 | `api/auth.rs::setup` | `auth_setup` | 同上 |
 | 登出（仅有效 token） | `api/auth.rs::logout` | `auth_logout` | 同上 |
@@ -517,11 +521,13 @@ files 侧 scope 记 **id 而非路径**：worktree 会移动、session cwd 会�
 | 修改用户名 | `api/auth.rs::change_username` | `auth_username_change` | 同上（detail 记旧名） |
 | 登录限流触发 | `api/auth.rs::reject_bad_credentials` | `auth_rate_limited` | 每 IP 每窗口 ≤1 条 |
 
-**auth 类动作的三条决策**（2026-10-11，见 `docs/dev/plans/2026-10-11-auth-audit-logging.md`）：① 成功类 target 一律写当时账号名——`auth_username_change` 写新名、detail 记旧名（单账号下 target 回答「谁登录 / 哪个账号被改动」）；② `auth_logout` 仅当请求携带**有效 token** 才记——`/auth/logout` 是公开端点（无 `require_auth_mw`），无条件记录会让攻击者用 1000 次无认证请求刷穿滚动上限、冲掉整张台账；校验在 `token_version + 1` 之前执行（bump 后旧 token 立即失效）；③ `auth_rate_limited` 是**唯一失败类动作**——不是逐次失败，而是 `LoginGuard::record_failure` 返回「失败计数首次到达阈值」的聚合信号，写入频率被钉在每 IP 每窗口 ≤1 条；逐次登录失败刻意不记（公开端点写放大，且同样可被无认证灌量，见该计划「不纳入范围」）。
+**auth 类动作的三条决策**（2026-10-11，见 `docs/dev/plans/2026-10-11-auth-audit-logging.md`）：① 成功类 target 一律写当时账号名——`auth_username_change` 写新名、detail 记旧名（单账号下 target 回答「谁登录 / 哪个账号被改动」）；② `auth_logout` 仅当请求携带**有效 token** 才记——`/auth/logout` 是公开端点（无 `require_auth_mw`），无条件记录会让攻击者用 1000 次无认证请求刷穿滚动上限、冲掉整张台账；校验在 `token_version + 1` 之前执行（bump 后旧 token 立即失效）；③ `auth_rate_limited` 是**限流类聚合动作**——不是逐次失败，而是 `LoginGuard::record_failure` 返回「失败计数首次到达阈值」的聚合信号，写入频率被钉在每 IP 每窗口 ≤1 条；逐次登录失败刻意不记（公开端点写放大，且同样可被无认证灌量，见该计划「不纳入范围」）。
+
+**代理拒绝审计的例外（2026-10-26，P4）**：`proxy_denied` 是继 `auth_rate_limited` 之后第二个「失败类」动作，防刷屏边界为三重：① 仅 `auth_enabled=true` 时写（auth 关闭时整个服务匿名，拒绝事件可被无限灌量）；② 按 `(port, reason)` 首次出现去重（`ProxyDenyLog`，容量 `MAX_TRACKED_PROXY_DENIALS=256`）；③ 拒绝路径不写 `proxy_access`、不进首访登记。认证态下一个进程生命周期最多新增 256 条拒绝行。配置变更 `proxy_settings_changed` 只在成功且非 no-op 时记一条。
 
 **读操作刻意不审**：热路径（list/read/search）每次请求都写一条是纯写放大，且「谁看过什么」对事后追查的增量价值远低于「谁改了什么」。
 
-**proxy 的特殊性（无原子开通事件）**：其余动作都有确定的「开通」语义（handler 成功返回），代理没有——`/proxy/{port}` 是 catch-all，任何被白名单放行的端口**首次被访问即打通**，没有独立的「开启端口」调用可供插桩。故审计只能记「端口首次被访问」，用 `ProxyState::audited_ports`（`PortAuditLog`：`HashSet` 去重 + `VecDeque` 记序）**按端口去重**——不做这个去重的话，反代流量（一个 dev server 的每次请求都过 catch-all）每次请求都写一条 audit 行 = 写放大（§P1）。`insert` 返回 `true` 才落库。**登记表有界**：`MAX_TRACKED_PROXY_PORTS=4096`（白名单范围 3000..=65535 共 62536 个，4096 覆盖任何真实形态且把内存钉在 KB 级），超限淘汰最早登记者；被淘汰端口再访问会被当成「首次」补记一条——这是「有界内存」与「不漏记」之间取前者（内存无界是 §P1 红线，重复一条只是噪音）。**白名单校验在前、登记在后**：被 `is_port_allowed` 拒绝的端口不进登记表（拒绝路径已有自己的 warn，且 no_upstream 类的反复探测不该污染审计）。
+**代理的特殊性（无原子开通事件）**：其余动作都有确定的「开通」语义（handler 成功返回），代理没有——`/proxy/{port}` 是 catch-all，任何被白名单放行的端口**首次被访问即打通**，没有独立的「开启端口」调用可供插桩。故审计只能记「端口首次被访问」，用 `ProxyState::audited_ports`（`PortAuditLog`：`HashSet` 去重 + `VecDeque` 记序）**按端口去重**——不做这个去重的话，反代流量（一个 dev server 的每次请求都过 catch-all）每次请求都写一条 audit 行 = 写放大（§P1）。`insert` 返回 `true` 才落库。**登记表有界**：`MAX_TRACKED_PROXY_PORTS=4096`（白名单范围 3000..=65535 共 62536 个，4096 覆盖任何真实形态且把内存钉在 KB 级），超限淘汰最早登记者；被淘汰端口再访问会被当成「首次」补记一条——这是「有界内存」与「不漏记」之间取前者（内存无界是 §P1 红线，重复一条只是噪音）。**策略校验在前、首访登记在后**：被策略拒绝的端口不进首访登记表；P4（2026-10-26）起拒绝路径另写 `proxy_denied`（认证态 + `(port, reason)` 去重 + 256 上限），与首访审计互不污染。
 
 **agent detail 只记 env 键名不记值（§S3）**：env 是 `KEY=VALUE` 形式，value 可能含密钥，detail 只留 `{"command":…, "env_keys":[…]}` 的键名。**但不要把这句读成「detail 绝不会含凭据」**：`command` 是自由文本、原样落库，`agent --token=sk-…` 这类形态会把凭据写进 detail。这是刻意不做的通用掩码——单人工具自己输入自己看，为它加 flag 值脱敏属过度设计；若将来 agent 配置支持共享/导入，必须补掩码。同理，agent 配置决定后续每条会话 spawn 什么进程、注入什么环境，改动它是「未来所有会话的行为」变更，故三个动作全审。
 
@@ -567,12 +573,26 @@ files 侧 scope 记 **id 而非路径**：worktree 会移动、session cwd 会�
 - **`X-Forwarded-*`（2026-08-15 补全，D6 声明但此前未实现）**：请求转发前补 `X-Forwarded-For`（已有链则逗号追加客户端 IP，无则新建；客户端 IP 经 `ConnectInfo` 从请求 extensions 提取，纯函数签名带 `client_ip: Option<IpAddr>`）、`X-Forwarded-Proto`（缺失补 `http`）、`X-Forwarded-Host`（缺失取**原始** Host，即浏览器访问的 Host，而非重写后的 `127.0.0.1:{port}`）。**已有值保留不覆盖**——外层 nginx 等可能已带 `https`/真实 Host，覆盖会误导上游（见「多实现差异」）。
 - **响应体重写（绝对路径 SPA 兜底）**：`text/html` 的 `src`/`href`/`srcset`/`action`/`poster` 属性、`text/javascript`（及 `application/javascript` 等）的 `"/api/`、`'/api/`、`` `/api/ `` 字符串字面量，统一补 `/proxy/{port}` 前缀。上限 HTML 4MiB / JS 16MiB，超限放弃重写、已读头部拼回流前部继续流式透传。重写是**全局一致**的——请求路径与 `===`/`includes` 比较字面量同步带前缀，比较逻辑不失真；外部 URL（`https://…`）、协议相对（`//cdn…`）、相对路径、已带 `/proxy/` 前缀的不动。见「响应体重写与绝对路径 SPA」小节。
 
+### 运行时安全策略与审计（P4，2026-10-26）
+
+P4 把端口策略从编译期常量提升为可运行时收窄的配置，并补齐拒绝/配置变更审计。**硬边界不随设置变化**：目标 IP 恒 `127.0.0.1`，`3000..=65535` 下限、`DENIED_PORTS`/`DENIED_PORT_RANGES`、自身监听端口排除始终生效；设置只能**进一步收窄**。
+
+- **settings key**：`proxy_enabled`（`'1'`/`'0'`，缺失/脏值按开启，保持既有部署行为）、`proxy_port_mode`（`default`/`allowlist`，缺失/脏值回退 `default`）、`proxy_allowed_ports`（JSON 数组，最多 `MAX_PROXY_ALLOWED_PORTS=64` 条）。`allowlist` + 空清单 = **全拒**（fail closed）。
+- **策略对象**：`ProxyPolicy`（enabled + mode + 去重升序 `BTreeSet`）启动时由 `api::settings::load_proxy_policy` 加载进 `ProxyState.policy: Arc<RwLock<ProxyPolicy>>`；热路径只读快照（`decide` 返回 `Copy` 的 `Allowed|Disabled|PortDenied`），**不查 DB、锁不跨 await**。PUT 严格校验（非法 mode、超上限、<3000、黑名单/黑名单段、自身端口一律 400）→ 事务写三 key → 整体替换内存快照 → 审计；与当前快照相同为 no-op（不写库、不审计）。GET 返回内存中的**生效策略**（绕过 API 直接改 DB 不会热更新，需重启；升级后首次启动以 DB 为准）。
+- **入口矩阵**：`dispatch_proxy` 是策略、首访审计与 WS Origin 校验的**唯一关卡**：
+  - 路径前缀 HTTP/WS：`require_auth_mw` → `dispatch_proxy`。
+  - 子域名 HTTP/WS：`proxy_host_mw` 解析 Host → `verify_request` **先鉴权** → 归一化 URI → 提取 `WebSocketUpgrade` → `dispatch_proxy`。子域名 WS 不再直连 `ws::relay`（2026-10-26 前的结构缺陷：该分支绕过策略、首访审计与 Origin 校验）。
+  - 顺序统一为 **401（未认证）先于 403（策略拒绝）**，不再通过状态码差异暴露端口策略。
+- **审计**：`proxy_access`（放行端口首次访问，4096 有界去重）保持原语义，子域名 WS 现在也计入；`proxy_denied`（disabled / port_not_allowed，仅 `auth_enabled=true` 时写、按 `(port, reason)` 首见去重、上限 256，防匿名灌量冲掉台账）；`proxy_settings_changed`（PUT 成功且非 no-op，target=`proxy`，detail 记录 enabled/mode/allowed_ports）。审计失败只 warn，不影响代理响应。
+- **已打开连接**：关闭开关/收紧清单只影响**新的**代理请求与 WS 握手；既有 WS relay 不会被强制断开（与「配置即时生效」的预期一致，重连时自然被拒）。
+- **前端联动**：`/system/info` 返回 `proxy_enabled`；关闭后前端不再把 localhost 链接重写为代理 URL（见 `frontend.md`「localhost 链接重写」）。
+
 ### 子域名 Host 路由（`{port}.{base}`，D1 翻盘）
 
 路径前缀无法代理**绝对路径资源**的 SPA（Vite `/@vite/client`、Next.js `/_next/*` 会绕过 `/proxy/{port}/` 前缀直达 omniterm-host 而 404）。配置 `--proxy-domain <base>`（env `OMNITERM_PROXY_DOMAIN`）后启用子域名方案：
 
-- **入口**：最外层 middleware `proxy_host_mw`（仅 `base_host` 配置时挂载，先于 CorsLayer/TraceLayer/Router/fallback），`parse_proxy_host` 精确匹配 `{纯数字}.{base}`（可带 `:{listen_port}` 后缀，大小写不敏感，IPv6 字面量 `[::1]:8080` 按 `]` 结尾判别不误剥端口），命中即代理、否则放行。端口白名单 + 鉴权（`verify_request`，同样提取 `ConnectInfo` 传入本地免密判据）与路径前缀入口完全等价——**子域名不走路由层 `require_auth_mw`，须在 middleware 内显式鉴权**，否则 auth 开启时成开放代理。子域 Host 恒为 `{port}.{base}`（非回环字面量）→ 永不命中本地免密，只认 token。
-- **WS**：middleware 内 `is_ws_upgrade` 判头 + `WebSocketUpgrade::from_request_parts` 手动提取（middleware 无法用 extractor），复用 `ws::relay`。**WS 入口统一做 Origin 校验（CSWSH 防御，2026-08-15 起覆盖代理入口；2026-09-26 起收敛为四入口唯一真源，见「WS Origin 校验」小节）**：浏览器发起的 WS 必带 Origin，Origin 的 host 与请求 Host（均忽略端口）不一致即 403；无 Origin（curl/原生 WS 等非浏览器）放行——CSWSH 只能由浏览器触发。参考 code-server `ensureOrigin`。**relay 收尾发送 Close 帧（2026-08-15）**：任一侧结束（EOF/Close）时 abort 读侧后，写侧收到队列 channel 关闭会把残留的 Close 帧发完再自然退出（有界 2s 超时兜底），上游/客户端不再干等连接超时；此前直接 abort 写侧导致 Close 来不及发出。
+- **入口**：最外层 middleware `proxy_host_mw`（仅 `base_host` 配置时挂载，先于 CorsLayer/TraceLayer/Router/fallback），`parse_proxy_host` 精确匹配 `{纯数字}.{base}`（可带 `:{listen_port}` 后缀，大小写不敏感，IPv6 字面量 `[::1]:8080` 按 `]` 结尾判别不误剥端口），命中即代理、否则放行。**子域名不走路由层 `require_auth_mw`，须在 middleware 内显式鉴权**（`verify_request` + `ConnectInfo`），否则 auth 开启时成开放代理。子域 Host 恒为 `{port}.{base}`（非回环字面量）→ 永不命中本地免密，只认 token。**鉴权在策略之前**（P4，2026-10-26）：未认证请求统一 401，不暴露端口策略；策略/首访审计/Origin 校验统一交给 `dispatch_proxy`。
+- **WS**：middleware 在鉴权后统一提取 `WebSocketUpgrade`（非升级请求为 `None`）并调用 `dispatch_proxy`——**不再直连 `ws::relay`**。WS 入口的 Origin 校验（CSWSH 防御）与路径前缀共用 `dispatch_proxy` 内同一判据（`crate::ws::origin_matches_host`）：浏览器发起的 WS 必带 Origin，Origin 的 host 与请求 Host（均忽略端口）不一致即 403；无 Origin（curl/原生 WS 等非浏览器）放行——CSWSH 只能由浏览器触发。参考 code-server `ensureOrigin`。**relay 收尾发送 Close 帧（2026-08-15）**：任一侧结束（EOF/Close）时 abort 读侧后，写侧收到队列 channel 关闭会把残留的 Close 帧发完再自然退出（有界 2s 超时兜底），上游/客户端不再干等连接超时；此前直接 abort 写侧导致 Close 来不及发出。
 - **鉴权 cookie 跨子域名**：登录/登出的 token cookie 在启用子域名且 base 为合法带点域名时加 `Domain={base}`（`src/api/auth.rs::token_cookie/clear_cookie`），使 `{port}.{base}` 子域名能携带 cookie 通过鉴权；**base 为 IP / localhost / 无点单标签域名时不设 Domain（host-only）**——浏览器规范要求 `Domain` 必须含点，`Domain=192.168.5.216` 会被直接拒绝导致子域名鉴权永久失效（2026-08-15 防御，参考 code-server `getCookieDomain`）；未启用子域名时维持 host-only。
 - **前端**：`/system/info` 返回 `proxy_domain`，前端 `rewriteLocalUrl` 据此生成 `{port}.{base}` 子域名 URL（见 `docs/architecture/frontend.md`）。
 - **DNS 部署（用户侧，非代码）**：局域网 IP 无法子域名（`3000.192.168.5.216` 非法），需用户配置可通配符解析的域名指向 OmniTerm 机器，三选一：局域网 DNS（dnsmasq/pihole `address=/.{base}/{IP}`）、公网 DNS（wildcard A 记录）、hosts 文件（逐端口加）。未配 DNS 则子域名不生效、路径前缀兜底。
@@ -957,10 +977,15 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 | `local_auth_required` | 本地访问是否同样要求密码（`'1'`/`'0'`，缺失/脏值按 `'1'` fail-closed；默认 `'1'`） | `main.rs` 启动注入 `AppState.local_auth_required`（仅 `auth_enabled` 开启时生效）；`POST /auth/settings` 切换；判据见 `auth::local_access` |
 | `acp_idle_recycle_min` | ACP 空闲回收阈值（分钟，值域 1..=60） | `main.rs` 启动解析（缺失/非数字回退 `IDLE_RECYCLE_SECS`=300s）注入 `AppState.acp_idle_recycle_secs: Arc<AtomicU64>`；`src/acp/reaper.rs` 每个 tick 动态 `load`（运行时热更新） |
 | `acp_perm_timeout_mode` | 权限请求超时模式（白名单 abort/auto/wait） | `main.rs` 启动解析（缺失/非法回退 abort）与 `acp_perm_timeout_secs`（秒，0=「总是」档或 30 秒倍数 ≤3600，缺失/非档位回退 1800s；再退旧的 `acp_perm_timeout_min` 分钟键）一起注入 `AppState.acp_perm_timeout: Arc<PermissionTimeoutConfig>`（AtomicU8 模式 + AtomicU64 秒）；reaper 每个 tick `snapshot()`（运行时热更新） |
+| `proxy_enabled` | 端口转发代理全局开关（`'1'`/`'0'`；缺失/脏值按开启，保持既有行为） | `main.rs` 启动经 `load_proxy_policy` 注入 `ProxyState.policy`；`PUT /settings/proxy` 热替换；`/system/info` 的 `proxy_enabled` 供前端门控链接重写 |
+| `proxy_port_mode` | 代理端口策略（`default` = 现有安全范围；`allowlist` = 仅清单内端口；缺失/脏值回退 `default`） | 同上；`ProxyPolicy::decide` 在每个代理请求热路径读取内存快照 |
+| `proxy_allowed_ports` | 严格模式放行清单（JSON 数组，最多 64 条；黑名单/自身端口在加载与写入时均拒绝） | 同上；`allowlist` + 空清单 = 全拒 |
 
 **ACP 空闲回收阈值 API**（`src/api/settings.rs`，挂载在 `require_auth_mw` 保护路由组）：`GET /api/v1/settings/acp-idle-recycle` 返回 `{minutes}`，无记录/非数字回退默认 5；`PUT` 校验分钟值 1..=60（越界 400），合法则 upsert settings 表并热更新内存秒级阈值（分钟×60）。`run_reaper(supervisor, idle_recycle_secs, perm_timeout)` 的 idle 判定每次读取该共享值，改配置无需重启即生效。`IDLE_RECYCLE_SECS` 保留为 DB 无配置时的兜底默认。
 
 **权限请求超时配置 API**（同文件同路由组）：`GET /api/v1/settings/permission-timeout` 返回 `{mode, seconds}`，无记录/模式非法/非档位值逐项回退 `abort` + 1800 秒；`PUT` 校验 `mode` 白名单（abort/auto/wait，越界 400）与秒值档位 `is_valid_perm_timeout_secs`（`0` = 「总是」档，或 ≤3600 的 30 秒倍数；越界 400），合法则 upsert `acp_perm_timeout_mode` / `acp_perm_timeout_secs` 两个 key、删除 2026-10-01 前的分钟制旧键 `acp_perm_timeout_min` 并 `PermissionTimeoutConfig::store` 热更新。档位规则与解析（含旧分钟键回退）是 `acp::reaper` 的纯函数，有单测。reaper 每 tick 读 `(模式, 秒级阈值)`：`abort` 走原 cancel+kill 路径（先写带详情的 system 消息）；`auto` 调 `auto_advance_permissions`（`pick_auto_option` 逐笔应答，上限 `MAX_PERM_NOTICE_REQUESTS`=5 条/ tick 的告知消息；一笔都解析不出时降级 abort）；`wait` 无动作。**阈值为 0（「总是」档）= 没有超时触发点**：auto 视为立刻到点（请求一出现即自动应答，不等待），abort/wait 则永不超时，且与 wait 同样跳过 prompt-stale 定稿（否则「等审批」的回合会被误判卡死）。
+
+**代理安全配置 API（P4，2026-10-26）**：`GET /api/v1/settings/proxy` 返回内存中的生效策略 `{enabled, mode, allowed_ports}`（默认 `true/default/[]`）；`PUT` 严格校验 mode 白名单、清单 ≤`MAX_PROXY_ALLOWED_PORTS`、每个端口过 `is_port_allowed` 硬边界（<3000、黑名单、黑名单段、自身端口一律 400），合法则 `upsert_settings` 事务写三 key、整体替换 `ProxyState.policy` 快照并写 `proxy_settings_changed`；相同值 no-op（不写库、不审计）。读取/写入统一走 `get_setting` / `upsert_settings` 共享助手（禁止再抄 SQL）。
 
 ## Projects 表
 

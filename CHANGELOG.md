@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- [backend] 端口转发代理安全加固（P4）：设置页可全局开关代理、在「安全范围 / 仅放行清单」间切换（清单 ≤64 条，黑名单与 OmniTerm 自身端口不可放行）；新增 `proxy_denied`（仅认证态、按端口+原因去重、上限 256）与 `proxy_settings_changed` 审计；子域名 WS 收敛到统一入口并补首访审计；关闭代理后前端不再重写 localhost 链接（2026-10-26 07:59）
+
 ### Changed
 
 - [frontend] 单条会话删除的二次确认由全屏模态改为贴着行内删除按钮的锚定气泡（PopoverConfirm）：点外部 / Esc / 滚动即关闭，ACP 的「同时永久删除 agent 侧记录」勾选与删除后 toast 语义不变；项目删除与批量删除仍为弹窗（2026-10-25 22:32）

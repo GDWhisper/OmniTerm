@@ -53,10 +53,11 @@
 | 登录防爆破 | ✅ LoginGuard 限流 |
 | 登录审计留痕 | ✅ 成功类（登录/设置密码/登出/改密/改名）全记 + 限流触发记一条（2026-10-11，计划 `docs/dev/plans/2026-10-11-auth-audit-logging.md`） |
 | WS CSWSH 防护 | ✅ 三主 WS 入口 + 代理 WS relay（路径前缀与子域名两条路径）统一 `origin_matches_host`（host 一致性比对；无 Origin / 无 Host 放行，畸形 Origin 403） |
+| 端口转发代理策略 | ✅ 全局开关/端口模式/放行清单经 `GET/PUT /settings/proxy` 管理，挂在 `require_auth_mw` 保护路由组（P4，2026-10-26）；auth 关闭时与其它 settings 一样匿名可写——非回环部署仍由 S1 拒绝启动兜底。子域名入口在策略之前鉴权（未认证统一 401）；拒绝审计 `proxy_denied` 仅在 auth 开启时记录 |
 | CORS 跨源读取 | ✅ 默认仅同源 + 显式白名单 `OMNITERM_CORS_ALLOWED_ORIGINS`（2026-09-26）；反代改写 `Host` 的部署需显式配置 |
 | 高危暴露预警 | ✅ 非回环 + auth 关闭时**拒绝启动**（fail-closed，2026-09-26；逃生门 `--insecure-no-auth`） |
 
-**注意**：`settings.auth_enabled` 默认关闭（本地开发便利）。部署到公网/不可信网络前必须开启密码验证（设置页开关，或 `OMNITERM_AUTH_ENABLED=1`）。若确需在可信内网以无鉴权方式监听非回环地址，2026-09-26 起必须显式传 `--insecure-no-auth`，否则后端拒绝启动。
+**注意**：`settings.auth_enabled` 默认关闭（本地开发便利）。部署到公网/不可信网络前必须开启密码验证（设置页开关，或 `OMNITERM_AUTH_ENABLED=1`）。若确需在可信内网以无鉴权方式监听非回环地址，2026-09-26 起必须显式传 `--insecure-no-auth`，否则后端拒绝启动。**代理安全配置与其它 settings 端点同权**（P4）：auth 关闭时任何可达客户端都能修改开关/放行清单，不为它单独加鉴权例外；需要收紧就开启 auth 或使用回环/可信网络。
 
 ## 相关文件
 
