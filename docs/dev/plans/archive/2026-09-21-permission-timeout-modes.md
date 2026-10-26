@@ -143,3 +143,7 @@ D1 的 auto 语义（代替用户应答全部 pending）叠加 10-09 勘误（�
 
 **回归**：`permTimeout.test.ts` 四态矩阵（auto+0 豁免 / auto+30s / abort+0 / wait 不豁免）；`useAcpChat.permissionorder.test.tsx` 五例（auto+0 不 fire 但 banner 照挂 / auto+30s 照常 fire / 默认档照常 fire / 连接内热更新按新值判定 / 重连补发帧同样豁免）。
 
+## 勘误（2026-10-26）：10-18 双轨告知在长 turn 下仍沉底——pin 化 + turn 归属归块
+
+10-18 勘误的「内联帧 + `noticeId` 去重」保护被其目标场景打穿：帧窗口（`MAX_FRAMES`/`MAX_BLOCKS_BYTES`）会驱逐内联告知帧，去重依据随之丢失，独立行「在列表位置上回落」= 整批沉底（正式库会话 `1362afb6`：28 分钟 turn、41 条 `system.permTimeout.auto` 独立行沉在底部，agent 最终输出被顶出视野）。修复与决策整体移交 `docs/dev/plans/2026-10-26-perm-notice-turn-attribution.md`（告知帧 pin 化豁免常规驱逐 + `chat_messages.turn_row_id` 归属 + 前端 `absorbSystemNotices` 归块进过程容器）；本计划的 `detail` 载荷与三分支语义不变。
+

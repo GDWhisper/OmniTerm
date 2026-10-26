@@ -309,6 +309,13 @@ export interface ChatMessage {
    * （用户拍板不为老数据回退「已工作」，见 work-time 计划 E25）。
    */
   finishedAt?: string | null
+  /**
+   * mid-turn SYSTEM 告知归属的 turn 行 id（= 目标 assistant 行的 `dbId`）。
+   * `GET /messages` 的 `turnRowId` 透传；null/缺省 = 无归属（turn 失败等终态告知）
+   * 或迁移前的历史行。`relocateOrphanSystemMessages` 据此把独立 system 行归块进
+   * 对应 turn 的过程容器（计划 2026-10-26 D2）。
+   */
+  turnRowId?: string | null
 }
 
 interface ChatSessionState {
@@ -1063,6 +1070,112 @@ export function dropInlinedSystemMessages(messages: ChatMessage[]): ChatMessage[
   )
 }
 
+/** 终态告知的 label 前缀：turn 非正常结束的失败提示必须留在消息流可见位，
+ *  不归块进过程容器（归了会被默认折叠成只剩一个箭头，弱化可见性）。 */
+const TURN_FAILED_LABEL_PREFIX = 'system.turnFailed'
+/** 可启发式归块的历史告知 label 前缀（计划 2026-10-26 D2）：只有权限超时类
+ *  mid-turn 告知有归块收益；未来新增类型走 `turnRowId`，不在此列。 */
+const RELOCATABLE_LABEL_PREFIX = 'system.permTimeout'
+
+/**
+ * 把「属于某 turn、却按 `created_at` 沉在消息流底部」的独立 SYSTEM 告知归块进该
+ * turn 的过程容器（计划 2026-10-26 D2）。
+ *
+ * 背景：assistant 行一行一 turn、`created_at` 锚定 turn 起点；mid-turn 告知（权限
+ * 超时自动放行等）各占独立 system 行、时间戳各自更晚 → 时间序展示下整批沉底，
+ * agent 最终输出被顶出视野（正式库会话 `1362afb6` 实测 41 条）。内联帧 + noticeId
+ * 去重本可吸收它们，但帧窗口驱逐后去重失效——归属改由落库字段承载，不再依赖
+ * 易失的帧窗口。
+ *
+ * 归块条件（命中其一）：
+ *  1. `turnRowId` 命中某 assistant 行的 `dbId`（2026-10-26 起的新数据）；
+ *  2. 历史行（无 `turnRowId`）：label 前缀 `system.permTimeout.` 且 `createdAt`
+ *     落在该 turn 的 `[createdAt, finishedAt]` 内（`finishedAt` 缺失的 turn 不匹配，
+ *     保守保留独立行）。
+ *
+ * 归块动作：system 块插入目标 blocks 的**最终 text 块之前**（过程区末尾，多条按
+ * `createdAt` 升序），随过程容器折叠；同 `noticeId` 已在 blocks 时只移除独立行。
+ * 位置是近似（块没有时间戳，插不回真实时点）——知情取舍，比沉底好；翻盘条件见
+ * 计划「不纳入」。幂等：独立行移除后再次调用无操作。
+ *
+ * 不归块：`system.turnFailed.*` 等终态告知（见 [`TURN_FAILED_LABEL_PREFIX`]）、
+ * 无法确定归属的行——维持整行独立渲染的既有形态。
+ */
+export function relocateOrphanSystemMessages(messages: ChatMessage[]): ChatMessage[] {
+  const assistants = messages.filter((m) => m.role === 'assistant')
+  const dropped = new Set<ChatMessage>()
+  // 归块候选（按 createdAt 升序）：一次遍历收集，之后只做不可变重组。
+  const relocations = new Map<ChatMessage, ChatMessage[]>() // target → 已按 createdAt 升序
+
+  for (const m of messages) {
+    if (m.role !== 'system') continue
+    const block = m.blocks.find((b): b is SystemBlock => b.type === 'system')
+    if (!block) continue
+    if (block.label.startsWith(TURN_FAILED_LABEL_PREFIX)) continue
+
+    let target: ChatMessage | undefined
+    if (m.turnRowId) {
+      target = assistants.find((a) => a.dbId === m.turnRowId)
+    } else if (block.label.startsWith(RELOCATABLE_LABEL_PREFIX)) {
+      const t = m.createdAt
+      target = assistants.find((a) => {
+        if (!a.finishedAt) return false
+        const end = Date.parse(a.finishedAt)
+        return Number.isFinite(end) && a.createdAt <= t && t <= end
+      })
+    }
+    if (!target) continue
+
+    dropped.add(m)
+    // 同 noticeId 已内联 → 只去重不再插块（dropInlinedSystemMessages 也覆盖这条，
+    // 但归块路径要自足：顺序上本函数先跑）。
+    if (block.noticeId && target.blocks.some((b) => b.type === 'system' && b.noticeId === block.noticeId)) {
+      continue
+    }
+    const list = relocations.get(target) ?? []
+    list.push(m)
+    relocations.set(target, list)
+  }
+
+  if (dropped.size === 0) return messages
+
+  return messages
+    .filter((m) => !dropped.has(m))
+    .map((m) => {
+      const pending = relocations.get(m)
+      if (!pending) return m
+      // 最终 text 结论的下标：其前为过程区（归组规则见 ChatMessage）。无 text 块时
+      // 过程区即整个块流，插到末尾。
+      let finalTextIdx = m.blocks.length
+      for (let i = 0; i < m.blocks.length; i++) {
+        if (m.blocks[i].type === 'text') finalTextIdx = i
+      }
+      // 多条告知按 createdAt 升序、整批插入同一锚点，保持彼此相对顺序。
+      const insertBlocks: ContentBlock[] = pending
+        .slice()
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .map((s) => {
+          const b = s.blocks.find((x): x is SystemBlock => x.type === 'system')
+          // 上面已 find 到过，必存在。
+          return b as SystemBlock
+        })
+      const blocks = m.blocks.slice()
+      blocks.splice(finalTextIdx, 0, ...insertBlocks)
+      return { ...m, blocks }
+    })
+}
+
+/**
+ * 收口入口：先把归属明确的独立 SYSTEM 告知归块进 turn 过程容器
+ * （[`relocateOrphanSystemMessages`]），再按 `noticeId` 去掉重复的独立行
+ * （[`dropInlinedSystemMessages`]）。hydrate / 上拉前插 / turn_snapshot / 聚焦补拉
+ * 一律走这里——两个动作都是「同一告知只出现一次、且尽量跟着 turn 走」，拆开
+ * 调用迟早漏一边（工程准则 7①）。
+ */
+export function absorbSystemNotices(messages: ChatMessage[]): ChatMessage[] {
+  return dropInlinedSystemMessages(relocateOrphanSystemMessages(messages))
+}
+
 /** 把 mode/usage/commands/configOptions/todos 等顶层字段 action 合并进 state。 */
 const applyTopLevelActions = (
   state: ChatStoreState,
@@ -1385,7 +1498,7 @@ export const useChatStore = create<ChatStore>((set, getStore) => ({
     set((state) => {
       const current = get(state, sessionId)
       if (current.messages.length > 0 || current.replaying) return state
-      const deduped = dropInlinedSystemMessages(messages)
+      const deduped = absorbSystemNotices(messages)
       const { todos, todosTitle } = scanTodoBoard(deduped)
       return patch(state, sessionId, { messages: deduped, todos, todosTitle, historyCursor })
     }),
@@ -1400,7 +1513,7 @@ export const useChatStore = create<ChatStore>((set, getStore) => ({
       const older = messages.filter((m) => !known.has(m.id))
       const combined = older.length > 0 ? [...older, ...current.messages] : current.messages
       return patch(state, sessionId, {
-        messages: dropInlinedSystemMessages(combined),
+        messages: absorbSystemNotices(combined),
         historyCursor,
         loadingHistory: false,
       })
@@ -1409,7 +1522,7 @@ export const useChatStore = create<ChatStore>((set, getStore) => ({
   replaceMessages: (sessionId, messages, historyCursor) =>
     set((state) =>
       patch(state, sessionId, {
-        messages: dropInlinedSystemMessages(messages),
+        messages: absorbSystemNotices(messages),
         historyCursor,
         loadingHistory: false,
       }),
@@ -1479,7 +1592,7 @@ export const useChatStore = create<ChatStore>((set, getStore) => ({
       }
       // DB 的 assistant 行可能已内联 mid-turn SYSTEM 告知；与 live/DB 的独立
       // system 行按 noticeId 收敛成一份（跨分页/跨来源统一入口）。
-      const deduped = dropInlinedSystemMessages(merged)
+      const deduped = absorbSystemNotices(merged)
       if (deduped.length !== merged.length) changed = true
       if (!changed) return state
       const { todos, todosTitle } = scanTodoBoard(deduped)
@@ -1533,7 +1646,7 @@ export const useChatStore = create<ChatStore>((set, getStore) => ({
       // 快照的 blocks 已包含 mid-turn SYSTEM 告知；live 的独立 system 消息按
       // noticeId 收口，避免同一告知在快照收编后出现两次。
       return patch(state, sessionId, {
-        messages: dropInlinedSystemMessages(kept),
+        messages: absorbSystemNotices(kept),
         todos,
         todosTitle,
       })

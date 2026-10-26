@@ -18,24 +18,31 @@ pub struct SyncMessageInput {
     pub blocks: Option<String>,
 }
 
+/// `turn_row_id`：mid-turn 告知归属的 turn 行 id（见 migration
+/// `20261026_add_chat_message_turn_row_id.sql`）；非告知消息与无归属告知传 `None`。
 pub async fn insert_message(
     db: &SqlitePool,
     session_id: &str,
     role: &str,
     text: &str,
     blocks: Option<&str>,
+    turn_row_id: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query("INSERT INTO chat_messages (id, session_id, role, text, created_at, blocks) VALUES (?, ?, ?, ?, ?, ?)")
-        .bind(&id)
-        .bind(session_id)
-        .bind(role)
-        .bind(text)
-        .bind(&now)
-        .bind(blocks)
-        .execute(db)
-        .await?;
+    sqlx::query(
+        "INSERT INTO chat_messages (id, session_id, role, text, created_at, blocks, turn_row_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(session_id)
+    .bind(role)
+    .bind(text)
+    .bind(&now)
+    .bind(blocks)
+    .bind(turn_row_id)
+    .execute(db)
+    .await?;
     Ok(())
 }
 
@@ -104,7 +111,7 @@ pub async fn list_messages_page(
     // before returning. One extra row is fetched to detect "there is an older page".
     let rows: Vec<ChatMessageRow> = sqlx::query_as(
         "SELECT role, text, created_at, id, blocks, status, last_seq, duration_ms, wait_ms, \
-                tool_ms, tps, finished_at \
+                tool_ms, tps, finished_at, turn_row_id \
          FROM chat_messages \
          WHERE session_id = ? \
            AND (? IS NULL OR created_at < ? OR (created_at = ? AND id < ?)) \
@@ -176,7 +183,7 @@ pub async fn list_messages_page_at(
     // 的并列行里目标行也在页内。
     let rows: Vec<ChatMessageRow> = sqlx::query_as(
         "SELECT role, text, created_at, id, blocks, status, last_seq, duration_ms, wait_ms, \
-                tool_ms, tps, finished_at \
+                tool_ms, tps, finished_at, turn_row_id \
          FROM chat_messages \
          WHERE session_id = ? \
            AND (created_at < ? OR (created_at = ? AND id <= ?)) \
@@ -456,6 +463,9 @@ pub struct ChatMessageRow {
     /// 该 turn 的定稿时刻（RFC3339，UTC）。NULL = 迁移前的历史行（无结束时刻记录，
     /// 不可追溯）——前端底部读数主段「结束于 14:32」据此渲染，NULL 不渲染。
     pub finished_at: Option<String>,
+    /// mid-turn 告知归属的 turn 行 id（本表 `id`）。NULL = 无归属（非 mid-turn 告知）
+    /// 或迁移前的历史行——前端据此把独立 system 行归块进对应 turn 的过程容器。
+    pub turn_row_id: Option<String>,
 }
 
 /// Insert-or-update the single in-progress assistant row for a turn. The backend turn
@@ -797,6 +807,7 @@ mod tests {
             "system",
             "权限请求 30 分钟未获响应，系统已自动取消该请求并回收会话",
             Some(r#"[{"type":"system","label":"权限请求 30 分钟未获响应"}]"#),
+            None,
         )
         .await
         .expect("role='system' insert must succeed after migration");
@@ -807,6 +818,36 @@ mod tests {
                 r.role == "system" && r.text.starts_with("权限请求 30 分钟未获响应")
             }),
             "hydrate 应能回读 system 消息"
+        );
+    }
+
+    /// mid-turn 告知的 `turn_row_id` 归属必须随读口透传（分页 / 定位页共用
+    /// `ChatMessageRow`），前端归块全靠它；`None`（无归属 / 历史行）也必须如实回读。
+    #[tokio::test]
+    async fn turn_row_id_roundtrips_through_read_paths() {
+        let db = fresh_db().await;
+
+        insert_message(&db, SESSION, "system", "告知甲", Some("[]"), Some("turn-1"))
+            .await
+            .expect("insert with turn row id");
+        insert_message(&db, SESSION, "system", "告知乙", Some("[]"), None)
+            .await
+            .expect("insert without turn row id");
+
+        let page = list_messages_page(&db, SESSION, None, 10, usize::MAX).await.expect("page");
+        let by_text = |t: &str| page.rows.iter().find(|r| r.text == t).expect("row present");
+        assert_eq!(by_text("告知甲").turn_row_id.as_deref(), Some("turn-1"), "归属应回读");
+        assert_eq!(by_text("告知乙").turn_row_id, None, "无归属应回读为 NULL");
+
+        let at = MessageCursor {
+            created_at: page.rows.last().expect("non-empty").created_at.clone(),
+            id: page.rows.last().expect("non-empty").id.clone(),
+        };
+        let at_page = list_messages_page_at(&db, SESSION, &at, 10, usize::MAX).await.expect("at");
+        let at_row = at_page.rows.iter().find(|r| r.text == "告知甲");
+        assert!(
+            at_row.is_none_or(|r| r.turn_row_id.as_deref() == Some("turn-1")),
+            "定位页同样必须透传归属"
         );
     }
 

@@ -1,5 +1,5 @@
 import {
-  dropInlinedSystemMessages,
+  absorbSystemNotices,
   type ChatMessage,
   type ContentBlock,
 } from '../stores/chatStore'
@@ -27,6 +27,8 @@ export interface StoredMessage {
   tps?: number | null
   /** turn 定稿时刻（RFC3339）；null = 无记录（迁移前的历史行），该段不渲染。 */
   finishedAt?: string | null
+  /** mid-turn 告知归属的 turn 行 id；null = 无归属（终态告知）或迁移前的历史行。 */
+  turnRowId?: string | null
 }
 
 /**
@@ -103,12 +105,14 @@ export function toChatMessages(
       toolMs: m.toolMs,
       tps: m.tps,
       finishedAt: m.finishedAt,
+      turnRowId: m.turnRowId,
     }
   })
 
   // mid-turn SYSTEM 告知双轨落盘：assistant 行内联一份有序帧（供正确排序），
   // 独立 system 行一份兜底（帧窗口驱逐后仍可回读）。assistant 行能解出同
-  // noticeId 时过滤独立行；解不出（帧被逐出 / 旧数据）则保留独立行——数据不丢，
-  // 只是回落到列表位置。收口逻辑与分页/合并共用同一函数。
-  return dropInlinedSystemMessages(messages)
+  // noticeId 时过滤独立行；解不出（帧被逐出 / 旧数据）时按 turn 归属归块进过程
+  // 容器（2026-10-26 计划 D2）；两者都做不到才保留独立行——数据不丢。收口逻辑
+  // 与分页/合并共用同一函数。
+  return absorbSystemNotices(messages)
 }

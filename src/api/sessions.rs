@@ -1001,6 +1001,10 @@ async fn list_messages(
                         // turn 定稿时刻（RFC3339，UTC）。null = 迁移前的历史行；前端
                         // 底部读数主段「结束于 14:32」据此渲染，null 不渲染。
                         "finishedAt": row.finished_at,
+                        // mid-turn 告知归属的 turn 行 id。null = 无归属（非 mid-turn
+                        // 告知）或迁移前的历史行；前端据此把独立 system 行归块进对应
+                        // turn 的过程容器（计划 2026-10-26 D2）。
+                        "turnRowId": row.turn_row_id,
                     })
                 })
                 .collect();
