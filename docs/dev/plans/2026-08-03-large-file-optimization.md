@@ -1,6 +1,6 @@
 # 大文件优化方向计划（Code Quality Pass）
 
-> 状态：进行中（2026-08-03）
+> 状态：**部分落实** — P0 已实施（2026-08-03，主文件后回涨）；P1 未实施；P2 按设计不排期。复核见 §7（2026-10-26）
 > 触发条件：代码规模审计产出；后续接「拆分 Sidebar / 拆分 ws 处理函数」等具体任务时，以此为方向指引
 > 关联：`docs/architecture/frontend-patterns.md`（Section 拆分原则）、`docs/dev/plans/PLAN-TEMPLATE.md`、AGENTS.md §7 奥卡姆剃刀
 > 定位：**方向性计划**，只记录现象与解决方向，不含具体代码改动；具体拆分任务落地时另出实施计划
@@ -27,7 +27,7 @@
 **核心现象**：
 1. **`Sidebar.tsx`：单个组件承载全部职责**。一个 `Sidebar()` 主组件横跨 2,500+ 行，内部 50+ 个 useState 管理五类互不相干的状态（项目/会话/worktree 创建、路径浏览、路径修复），8 个 modal/dialog 全部内联在返回 JSX 中，数据加载副作用（projects/worktrees/sessions 三套）与渲染混杂。**违背项目自身 `frontend-patterns.md` 的 Section 拆分原则**，且无 `Settings` 那样的子组件结构。
 2. **`src/ws/acp.rs`：`handle_acp_ws` 约 530 行巨型函数**（`ws/acp.rs:307-838`）。一个函数内串联订阅、快照、多事件分支（prompt/permission/todo/turn）处理，改动一处需通读全局。
-3. **`src/api/files.rs`：`resolve_base_from_query` 约 360 行超长函数**（`files.rs:188-549`）。路径解析多分支（project/session/query 来源）全部挤在一个函数里。
+3. **`src/api/files.rs`：`resolve_base_from_query` 约 360 行超长函数**（`files.rs:188-549`）。路径解析多分支（project/session/query 来源）全部挤在一个函数里。**（2026-10-26 复核证伪：计划提交时该函数已是 19 行分派器，见 §7）**
 
 **根因**：功能迭代中「往主文件里加」的惯性积累，没有在职责边界形成时及时拆分子模块；前端缺少对 Section 拆分原则的强制约束，后端 handler 缺少函数级拆分习惯。
 
@@ -68,18 +68,18 @@
 | Phase | 内容 | 产出 | 依赖 |
 |-------|------|------|------|
 | 0 | 本方向计划定稿 | 本文件 | — |
-| 1 | Sidebar 拆分（P0）（已实施 2026-08-03） | 子组件文件 + 主组件瘦身 + 相关 store/hook 调整 | frontend-patterns.md 约定 |
-| 2 | `ws/acp.rs` `handle_acp_ws` 拆分（P1） | 独立事件 handler + 单测 | 需先读 `2026-07-28-pty-engine-implementation.md` |
-| 3 | `api/files.rs` `resolve_base_from_query` 拆分（P1） | 小函数化 + 现有测试覆盖 | — |
+| 1 | Sidebar 拆分（P0）— **已实施 2026-08-03**；2026-10-26 复核主文件已回涨，见 §7 | 子组件文件 + 主组件瘦身 + 相关 store/hook 调整 | frontend-patterns.md 约定 |
+| 2 | `ws/acp.rs` `handle_acp_ws` 拆分（P1）— **未实施**（2026-10-26 复核） | 独立事件 handler + 单测 | 需先读 `2026-07-28-pty-engine-implementation.md` |
+| 3 | `api/files.rs` `resolve_base_from_query` 拆分（P1）— **取消**：前提不成立（该函数在计划提交时已是 19 行分派器，见 §7） | 小函数化 + 现有测试覆盖 | — |
 
 ## 5. 验收标准
 
-- [x] `Sidebar.tsx` 拆分后主文件降至 ~800 行以内，每个 modal 为独立子组件且自带状态
+- [x] `Sidebar.tsx` 拆分后主文件降至 ~800 行以内，每个 modal 为独立子组件且自带状态（实施时 765 行达标；2026-10-26 复核已回涨至 1488 行，见 §7）
 - [x] `Sidebar.tsx` 拆分后全部现有交互（创建/重命名/删除/修复/外部会话）行为不变，`Sidebar.test.tsx` 通过
-- [ ] `ws/acp.rs` `handle_acp_ws` 拆出的事件分支均有对应函数名，行为经 ACP 链路手动回归验证
-- [ ] `resolve_base_from_query` 拆分后三种路径来源（project / session / query）行为一致
-- [ ] 质量门禁零新增违规：`clippy` / `tsc strict` / `cargo test` 全绿
-- [ ] CHANGELOG 按实质改动记录（纯重构拆分属可记录范围，见 AGENTS 规则 3）
+- [ ] `ws/acp.rs` `handle_acp_ws` 拆出的事件分支均有对应函数名，行为经 ACP 链路手动回归验证（**未实施**）
+- [ ] `resolve_base_from_query` 拆分后三种路径来源（project / session / query）行为一致（**前提不成立**：计划提交时该函数已是 19 行分派器，无需实施）
+- [ ] 质量门禁零新增违规：`clippy` / `tsc strict` / `cargo test` 全绿（P0 实施时通过；P1 无改动，未单独复核）
+- [ ] CHANGELOG 按实质改动记录（P0 已记录 2026-08-03 23:40；P1 无改动可记）
 
 ## 6. 风险与文档闭环
 
@@ -91,4 +91,17 @@
 - `docs/architecture/frontend.md` — Source Tree 变更
 - `docs/workflows/agent-edit-manual.md` — 若 Sidebar 出现「特殊维护约定」（数据/视图分离等）
 - `CHANGELOG.md` — 实质性重构条目
-- 本文档状态推进：设计稿 → 进行中 → 已实施
+- 本文档状态推进：设计稿 → 进行中 → 已实施（P0）；P1 复核结论见 §7
+
+## 7. 现状复核（2026-10-26）
+
+> 复核对象为计划提交 `24c205e5` 与当前 HEAD。计划 §1 的审计数据保持原样（历史快照），实际偏差在此更正。
+
+| 项 | 当前事实 | 与计划的偏差 |
+|----|----------|--------------|
+| P0 Sidebar | `Sidebar.tsx` 1488 行，`Sidebar()` 主函数 108-1418 行；子组件与 `useDirBrowser` / `useAgentAttentionPolling` 均在用 | 拆分本身已落地（实施时 765 行）；后续功能（拖拽排序、批量选择、Agent 历史、归档区等）使主组件回涨，≤800 行的验收目标当前失效。是否再拆需另立任务，不在本计划内自动重启 |
+| P1 `ws/acp.rs` | `handle_acp_ws` 仍为单函数（`src/ws/acp.rs:1130-1565`，约 436 行），`Prompt` / `Cancel` / `LoadSession` / `PermissionResponse` / `SetConfigOption` / `Ping` 分支全部内联，其中 `Prompt` 分支约 147 行 | **未实施**。计划要求的「事件分支抽独立 handler」只对广播转发成立（`spawn_notify_task` / `spawn_permission_task` 等），而这些在计划提交时已存在（当时 6 个，现 7 个）；客户端消息分派未拆 |
+| P1 `api/files.rs` | `resolve_base_from_query` 为 19 行分派器（`src/api/files.rs:305-323`），下分 `resolve_project_root` / `resolve_session_base` / `resolve_workspace_root` | **前提不成立**：计划提交时该函数已是同样形态，§1 所述「约 360 行」与仓库不符（疑为旧快照/旧分支数据）。该项取消，无需实施 |
+| P2 | `client.rs` / `FileManager.tsx` / `useAcpChat.ts` / `chatStore.ts` / `ChatInput.tsx` 未做结构性拆分 | 符合 D3（无真实修改需求不动） |
+
+**结论**：P0 已完成并有文档/CHANGELOG 闭环，但验收的瘦身效果已被后续功能抵消；P1 的 `ws/acp.rs` 部分未做，`files.rs` 部分因审计前提错误而取消。若继续推进，只需另立 `handle_acp_ws` 的拆分实施计划。
