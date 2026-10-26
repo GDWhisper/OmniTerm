@@ -105,6 +105,7 @@ async fn system_info(State(state): State<AppState>) -> Json<Value> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| "/".into());
+    let proxy_enabled = state.proxy.policy.read().unwrap_or_else(|e| e.into_inner()).enabled();
 
     Json(json!({
         "home_dir": home,
@@ -112,6 +113,8 @@ async fn system_info(State(state): State<AppState>) -> Json<Value> {
         "multiplexer": state.engines.multiplexer_name(),
         // 子域名代理 base（`--proxy-domain`）；`null` = 未启用，前端据此决定是否生成子域名 URL
         "proxy_domain": state.proxy.base_host,
+        // 端口转发代理全局开关（P4）：关闭后前端不再把 localhost 链接重写为代理 URL
+        "proxy_enabled": proxy_enabled,
     }))
 }
 

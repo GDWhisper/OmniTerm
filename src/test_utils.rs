@@ -40,8 +40,12 @@ pub async fn test_state() -> AppState {
             self_port: 9777,
             base_host: None,
             max_request_body: crate::proxy::MAX_REQUEST_BODY,
+            policy: Arc::new(std::sync::RwLock::new(crate::proxy::ProxyPolicy::default())),
             audited_ports: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::proxy::PortAuditLog::default(),
+            )),
+            audited_denials: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::proxy::ProxyDenyLog::default(),
             )),
         },
         max_upload_body: crate::api::files::MAX_UPLOAD_BODY_DEFAULT,

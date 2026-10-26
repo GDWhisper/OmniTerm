@@ -21,7 +21,7 @@
 //! 只限条目数不管单条大小 = 没限（§P1 案例 2 的教训：上限维度必须匹配真实
 //! 增长维度）。反过来只限大小不管条数同样没限，故两个维度都要。
 //!
-//! # 只记成功操作（一致的取舍），唯一例外见下
+//! # 只记成功操作（一致的取舍），两处例外见下
 //!
 //! 全部写入点只在**业务操作成功之后**调用[`record`]。失败的操作没有改变
 //! 系统状态，「谁试过但没成功」对事后追查的增量价值低于它带来的复杂度
@@ -29,13 +29,20 @@
 //! 试，应作为独立动作（`*_failed`）统一加，**不要**在部分写入点加、部分
 //! 不加——那会让「没记录」变成歧义信号。
 //!
-//! **唯一例外：[`AuditAction::AuthRateLimited`]（2026-10-11）**。它不是
+//! **例外一：[`AuditAction::AuthRateLimited`]（2026-10-11）**。它不是
 //! 「逐次失败」而是「跨过阈值」的聚合信号：`LoginGuard` 只在某 IP 失败
 //! 计数**首次**到达 5 次 / 5 分钟时上报一次（随后请求被 429 拦截、不重复
 //! 计次），写入频率被钉在「每 IP 每窗口 ≤1 条」。这保住了公开端点
 //! （`/auth/login`）不可被无认证灌量刷穿台账（1000 条滚动上限）的性质；
 //! 逐次失败仍然刻意不记——见 `docs/dev/plans/2026-10-11-auth-audit-logging.md`
 //! 「不纳入范围」。
+//!
+//! **例外二：[`AuditAction::ProxyDenied`]（2026-10-26，P4）**。代理拒绝
+//! 同样不是逐次记录：仅在**认证开启**时写（auth 关闭时整个服务本就匿名，
+//! 拒绝事件可被无限灌量），且按 `(端口, 原因)` 首次出现去重，登记表有界
+//! 256 条（`proxy::MAX_TRACKED_PROXY_DENIALS`）。匿名/未认证请求不写，
+//! 认证态下一个进程生命周期最多 256 条新行。见
+//! `docs/dev/plans/2026-08-13-port-forward-proxy.md` P4 实施记录。
 //!
 //! ## 已知边界：多文件上传的部分成功不留痕
 //!
@@ -127,6 +134,11 @@ pub enum AuditAction {
     AgentDelete,
     /// 代理端口首次被访问（非「开通」：代理无原子开通事件，见计划 D4）。
     ProxyAccess,
+    /// 代理请求被策略拒绝（开关关闭 / 端口不在放行范围）。失败类动作，
+    /// 语义与防刷屏边界见模块头「例外二」。
+    ProxyDenied,
+    /// 代理安全配置变更（全局开关 / 端口模式 / 放行清单）。
+    ProxySettingsChanged,
     /// 登录成功（`/auth/login` 凭据校验通过）。target = 当时账号名。
     AuthLogin,
     /// 首次设置密码成功（`/auth/setup` 创建账号；等价「设置密码 + 首登」）。
@@ -154,6 +166,8 @@ impl AuditAction {
             Self::AgentUpdate => "agent_update",
             Self::AgentDelete => "agent_delete",
             Self::ProxyAccess => "proxy_access",
+            Self::ProxyDenied => "proxy_denied",
+            Self::ProxySettingsChanged => "proxy_settings_changed",
             Self::AuthLogin => "auth_login",
             Self::AuthSetup => "auth_setup",
             Self::AuthLogout => "auth_logout",
@@ -585,6 +599,8 @@ mod tests {
             (AuditAction::AgentUpdate, "agent_update"),
             (AuditAction::AgentDelete, "agent_delete"),
             (AuditAction::ProxyAccess, "proxy_access"),
+            (AuditAction::ProxyDenied, "proxy_denied"),
+            (AuditAction::ProxySettingsChanged, "proxy_settings_changed"),
             (AuditAction::AuthLogin, "auth_login"),
             (AuditAction::AuthSetup, "auth_setup"),
             (AuditAction::AuthLogout, "auth_logout"),

@@ -978,6 +978,10 @@ fn main() -> anyhow::Result<()> {
                 .build()
                 .context("failed to build proxy HTTP client")?;
 
+            // 代理安全策略（P4）：settings 表是启动期真相源，内存快照供热路径读取；
+            // 缺失/脏值回退安全默认，硬边界（范围/黑名单/自身端口）不可被配置放宽。
+            let proxy_policy = api::settings::load_proxy_policy(&db, args.port).await?;
+
             let state = AppState {
                 db,
                 jwt_secret,
@@ -997,8 +1001,12 @@ fn main() -> anyhow::Result<()> {
                     self_port: args.port,
                     base_host: args.proxy_domain.clone(),
                     max_request_body: args.proxy_max_body.unwrap_or(proxy::MAX_REQUEST_BODY),
+                    policy: std::sync::Arc::new(std::sync::RwLock::new(proxy_policy)),
                     audited_ports: std::sync::Arc::new(std::sync::Mutex::new(
                         proxy::PortAuditLog::default(),
+                    )),
+                    audited_denials: std::sync::Arc::new(std::sync::Mutex::new(
+                        proxy::ProxyDenyLog::default(),
                     )),
                 },
                 max_upload_body: args.max_upload_body.unwrap_or(api::files::MAX_UPLOAD_BODY_DEFAULT),
