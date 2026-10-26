@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Changed
+
+- [frontend] 单条会话删除的二次确认由全屏模态改为贴着行内删除按钮的锚定气泡（PopoverConfirm）：点外部 / Esc / 滚动即关闭，ACP 的「同时永久删除 agent 侧记录」勾选与删除后 toast 语义不变；项目删除与批量删除仍为弹窗（2026-10-25 22:32）
+
 ### Fixed
 
 - [frontend] 桌面通知开关点击不再可能「毫无反应」：此前点击后的全部可见效果都押在 `Notification.requestPermission()` 的 await 之后，浏览器压制权限弹窗时该 promise 永不结算（如 Firefox 弹窗拦截吞掉权限弹窗、企业策略/隐私模式），表现为开关不翻转、状态行不更新、用户意图不记录；现用户意图同步落账（点击即翻转），请求期间状态行显示等待指引（含弹窗未出现时的排查路径：弹窗拦截/隐私模式/地址栏站点设置），且请求期间开关不禁用——可随时关闭再开重试（2026-10-25 09:30）

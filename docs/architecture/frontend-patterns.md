@@ -295,6 +295,44 @@
 **代价**：状态提升 + memo 契约要求回调稳定；新增回调忘了 `useCallback` 会静默
 拖慢列表（每勾选一次全列表重渲染）。
 
+## 锚定确认气泡 (popover-confirm convention)
+
+**适用场景**：**单条目标**的行内二次确认，需要保留列表上下文、不该用全屏遮罩打断
+（当前：侧栏会话删除，含活跃行与「已归档」区块）。批量删除、项目级联删除等
+多目标 / 大动作仍用 `ConfirmDialog`（需要承载跳过说明与汇总语义）。
+
+**契约**（实现见 `frontend/src/components/Common/PopoverConfirm.tsx` +
+`utils/popover.ts` 的 `PopoverAnchor`，视觉规格见 ui-style-guide §6.3.1）：
+
+- **锚点 = 视口矩形快照 + 触发元素的滚动容器**：触发按钮在 `onClick` 里调用
+  `popoverAnchor(e.currentTarget)`；`PopoverAnchor.rect` 只用于定位（列表轮询
+  重渲染可能替换按钮节点，气泡不持有触发元素的 DOM 引用），
+  `PopoverAnchor.scrollRoot` 是按钮当时最近的滚动祖先，仅用于把滚动关闭限定
+  在该列表内——**后台聊天/终端自动滚动不得关闭气泡**。
+- **开合状态由调用方持有**（`open` + `anchor`），组件只负责浮层与交互：
+  `createPortal` 到 `document.body`、`.pixel-float`、宽度 320（视口不足时按
+  8px 边距收缩）。垂直优先放在按钮下方，放不下翻到上方；水平右对齐按钮并
+  clamp 在视口内。内容超高时 `maxHeight` + `OverlayScroll`（滚动条统一约定）。
+- **关闭语义**：外部 `mousedown`、`Escape`、`scrollRoot` 滚动（气泡内部滚动
+  除外）、窗口 resize。锚点矩形内的按下视为触发按钮本身（不先关后开）；
+  点击另一行的删除按钮则会先关旧气泡再开新的。
+- **焦点**：打开时聚焦气泡容器（可 Tab 到取消/确认，避免误按 Enter 直接删除）；
+  关闭时若原焦点元素仍挂载则归还。`role="alertdialog"` + 标题/正文 id 关联。
+- **复选框语义与 Modal 版共用**：类型与勾选状态在
+  `hooks/useConfirmCheckbox.ts`，渲染在 `Common/ConfirmCheckbox.tsx`——
+  「记住上次选择」只由 `defaultChecked` 驱动、禁用态恒未勾选等细节不得在
+  两处各写一份。
+- **业务语义不变**：确认后立即关气泡、请求转后台；ACP agent 侧删除仍是
+  两段式（`pending` → 补发端点），结果由 toast 如实上报（见
+  `DeleteConfirmDialog` 与计划 2026-10-04 E-10/E-11）。
+
+**已有案例**：Sidebar 单条会话删除（`SessionRow` 行内删除按钮 +
+`ArchivedSessionsSection` 删除按钮，2026-10-25）。
+
+**收益**：单条动作不再打断侧栏浏览；无遮罩、无全屏居中，触点和上下文都保持在原行。
+**代价**：需要传递锚点快照并处理视口翻转/滚动关闭；不能承载多目标汇总说明
+（这类需求应继续走 Modal）。
+
 ---
 
 ## 列表拖拽排序 (drag-reorder convention)
@@ -699,6 +737,10 @@ Section 拆分原则同构（2026-08-03 `Sidebar.tsx` 拆分确立，实施计�
 `CreateWorktreeModal.tsx`、`ExternalSessionsSection.tsx`、`ProjectCard.tsx`、
 `hooks/useDirBrowser.ts`（目录浏览重复逻辑收敛），以及 E4 外移的
 `useAgentAttentionPolling.ts`（agent_state 轮询 + attention 检测）。
+
+> `DeleteConfirmDialog` 是「同一 target、两种载体」的例外：单条会话分支渲染
+> 锚定气泡（`PopoverConfirm`），项目分支仍是 Modal；`submitting`、两种删除
+> 的业务清理与 toast 仍集中在该组件，不因载体不同分叉。
 
 > **RepairPathDialog 契约**：`RepairTarget = { project; workspace?: Workspace | null; oldPath }`。
 > 两种触发入口共用同一弹窗——(1) 点击 worktree 时 `handleWorkspaceClick` 检测 `wt.path` 失效（

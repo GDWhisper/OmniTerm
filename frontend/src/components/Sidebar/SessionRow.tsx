@@ -12,6 +12,7 @@ import { hapticTap } from '../../utils/haptics'
 import { ArchiveButton, DeleteButton, ReleaseButton } from './RowActionButtons'
 import type { DeleteTarget } from './DeleteConfirmDialog'
 import type { ContextMenuPoint } from '../Common/ContextMenu'
+import { popoverAnchor } from '../../utils/popover'
 
 const MARQUEE_PX_PER_SECOND = 25
 const MARQUEE_MIN_SECONDS = 6
@@ -305,6 +306,9 @@ export const SessionRow = memo(function SessionRow({
                 acpSessionId: session.acp_session_id,
                 agentId: session.agent_id,
                 workspacePath: session.workspace_path,
+                // 删除确认是锚定气泡：把按钮此刻的视口矩形带出去
+                // （PopoverConfirm 据此贴边定位，不持有 DOM 引用）
+                anchor: popoverAnchor(e.currentTarget),
               })
             }}
           />

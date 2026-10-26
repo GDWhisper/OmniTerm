@@ -6,8 +6,8 @@ import { DeleteConfirmDialog, type DeleteTarget } from './DeleteConfirmDialog'
 import type { AgentSideDeleteResult, DeleteSessionResponse } from '../../api/client'
 
 /**
- * 删除确认弹窗的「同时永久删除 agent 侧会话记录」勾选框（ACP 协议 session/delete
- * 的前端入口）。钉住三件事：
+ * 删除确认（单条会话为锚定气泡，项目仍为 Modal）的「同时永久删除 agent 侧会话记录」
+ * 勾选框（ACP 协议 session/delete 的前端入口）。钉住三件事：
  *
  * 1. 判据 → 勾选框可用性（仅「agent 已知不支持」禁用；能力未知可勾选，后端会
  *    临时拉起短命 agent 补删）；
@@ -56,6 +56,7 @@ vi.mock('../../stores/appStore', () => ({
     selector: (s: Record<string, unknown>) => unknown,
   ) =>
     selector({
+      uiZoom: 100,
       activeProjectId: null,
       activeSessionId: null,
       workspaceSessionMemory: {},
@@ -67,7 +68,7 @@ vi.mock('../../stores/appStore', () => ({
     }),
 }))
 
-const acpTarget: DeleteTarget = {
+const acpTarget: Extract<DeleteTarget, { type: 'session' }> = {
   type: 'session',
   id: 'sess-1',
   name: 'acp session',
@@ -76,6 +77,11 @@ const acpTarget: DeleteTarget = {
   acpSessionId: 'acp-sess-1',
   agentId: 'agent-1',
   workspacePath: '/tmp/ws',
+  // 删除确认渲染为锚定气泡（PopoverConfirm），锚点来自行内删除按钮
+  anchor: {
+    rect: { left: 20, top: 40, right: 40, bottom: 60 },
+    scrollRoot: window,
+  },
 }
 
 let container: HTMLDivElement
@@ -129,6 +135,22 @@ afterEach(() => {
   act(() => root.unmount())
   container.remove()
   localStorage.clear()
+})
+
+describe('DeleteConfirmDialog · 确认载体', () => {
+  it('renders a session delete as an anchored popover, not a modal', () => {
+    setCapability(true)
+    render(acpTarget)
+    expect(document.body.querySelector('.popover-confirm')).toBeTruthy()
+    // Modal 的动画外壳不出现：没有全屏遮罩 / 居中弹窗
+    expect(document.body.querySelector('.animate-scale-in')).toBeNull()
+  })
+
+  it('keeps project deletion as a modal', () => {
+    render({ type: 'project', id: 'proj-1', name: 'project' })
+    expect(document.body.querySelector('.animate-scale-in')).toBeTruthy()
+    expect(document.body.querySelector('.popover-confirm')).toBeNull()
+  })
 })
 
 describe('DeleteConfirmDialog · agent 侧记录勾选框', () => {

@@ -2295,6 +2295,49 @@ body.parchment-texture {
   color: var(--danger);
 }
 
+/* ── 锚定确认气泡（PopoverConfirm，ui-style-guide §6.3.1）──────────
+   单条目标的二次确认：贴着触发按钮弹出，无遮罩。本体复用 .pixel-float
+   （2px 边框 + 4px 硬阴影）；本类只管布局与内部排版。
+   z-index 200 = 交互浮层档（与上下文菜单同层；两者不会同时打开）。 */
+.popover-confirm {
+  position: fixed;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: var(--reader-font);
+  outline: none;
+}
+.popover-confirm-content {
+  padding: 12px 14px 0;
+}
+.popover-confirm-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.popover-confirm-message {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.popover-confirm-checkbox {
+  margin-top: 10px;
+}
+.popover-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px 12px;
+}
+
 /* Interactive elements that keep their own border/colors but need the
    unified hard shadow + press displacement (see ui-style-guide §6). */
 .pixel-press {

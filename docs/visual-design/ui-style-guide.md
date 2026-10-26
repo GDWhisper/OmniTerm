@@ -432,6 +432,22 @@ Rules:
 | 禁用 | `opacity: 0.45` + `cursor: not-allowed`（`.pixel-press:disabled` 无阴影） |
 | 取消 | 24×24 图标按钮（`IconX`），样式与行内 action 按钮一致 |
 
+### 6.3.1 锚定确认气泡（PopoverConfirm）
+
+**单条目标的行内二次确认**（当前：侧栏会话删除，含「已归档」区块）；批量删除与
+项目级联删除仍用 Modal（§4 / §6.4）。行为契约见 frontend-patterns「锚定确认气泡」。
+
+| 元素 | 规格 |
+|------|------|
+| 容器 | `.pixel-float`（§6.1）+ `--bg-elevated`；`position: fixed`、z-index 200；宽 320px（视口不足时左右各留 8px）；**无遮罩**；flex column + `overflow: hidden` |
+| 标题 | reader 字体 13px / 600；行首 `◆`（危险动作 `var(--danger)`，其余 `var(--accent)`），文字 `--text-primary` |
+| 正文 | reader 字体 12px、`--text-muted`、line-height 1.55；`white-space: pre-line` + `overflow-wrap: anywhere` |
+| 复选框 | 与 ConfirmDialog 完全同款（`ConfirmCheckboxRow`：危险型红字、禁用型 opacity 0.55 + hint） |
+| 操作区 | 右对齐、间距 8px、`padding: 10px 14px 12px`；按钮走 `PixelButton`（取消 secondary，确认 danger / primary） |
+| 定位 | 优先按钮下方 6px；下方不足翻到上方；水平右对齐按钮并 clamp 到 8px 视口边距；内容超高时限制高度 + `OverlayScroll` |
+| 关闭 | 外部按下、Esc、触发按钮所在滚动容器滚动、窗口 resize；点击触发按钮本身不算外部 |
+| 焦点 | 打开时聚焦气泡容器（`role="alertdialog"`），关闭时归还原焦点（仍挂载时） |
+
 ### 6.4 全局浮层级（z-index 阶梯）
 
 跨组件叠放的浮层必须落在同一张阶梯上。**新增全局浮层前先对照本表选层**，
@@ -442,7 +458,7 @@ Rules:
 |----|---------|------|------|
 | 1 | 50 | Modal 蒙版 + 弹窗（`Modal.tsx`，portal） | 唯一弹窗层；报错提示不得低于它 |
 | 2 | 60 | 右下角 toast（`Toast.tsx`） | **必须 > 50**：弹窗内触发的报错要被看见（用户实测报错被蒙版盖住） |
-| 3 | 199 / 200 | 会话行上下文菜单遮罩 / 菜单（`SessionContextMenu.tsx`，portal） | 遮罩透明，仅拦指针 |
+| 3 | 199 / 200 | 会话行上下文菜单遮罩 / 菜单（`SessionContextMenu.tsx`）、锚定确认气泡（`PopoverConfirm.tsx`，portal） | 菜单遮罩透明，仅拦指针；气泡无遮罩，且与菜单不会同时打开 |
 | 4 | 9999 | CRT 扫描线（`.crt-overlay`，`pointer-events: none`） | 纯装饰，恒最上 |
 | 4 | 10000 | tmux 健康告警横幅（`TmuxHealthAlert.tsx`）/ DialogueToast（`.dialogue-toast`） | 持久告警与 RPG 对话 |
 

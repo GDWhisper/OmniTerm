@@ -206,6 +206,32 @@ describe('SessionRow 交互', () => {
     expect(container.querySelector('button[title="sidebar.delete"]')).toBeTruthy()
   })
 
+  it('删除按钮把锚定矩形随删除目标一起上报', () => {
+    const onDeleteRequest = vi.fn()
+    renderRow(baseProps({ onDeleteRequest }))
+    const btn = container.querySelector('button[title="sidebar.delete"]') as HTMLButtonElement
+    vi.spyOn(btn, 'getBoundingClientRect').mockReturnValue({
+      left: 180,
+      top: 240,
+      right: 200,
+      bottom: 260,
+      width: 20,
+      height: 20,
+      x: 180,
+      y: 240,
+      toJSON: () => ({}),
+    })
+
+    act(() => btn.click())
+
+    expect(onDeleteRequest).toHaveBeenCalledTimes(1)
+    expect(onDeleteRequest.mock.calls[0][0]).toMatchObject({
+      type: 'session',
+      id: 's1',
+      anchor: { rect: { left: 180, top: 240, right: 200, bottom: 260 } },
+    })
+  })
+
   it('时间优先取最近一次 turn 定稿时刻', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-10-24T12:00:00Z'))

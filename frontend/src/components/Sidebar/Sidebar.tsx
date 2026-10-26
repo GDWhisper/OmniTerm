@@ -1210,7 +1210,7 @@ export function Sidebar() {
           sessions={archivedSessions}
           onOpen={(s) => activateSession(s.id)}
           onUnarchive={(s) => void unarchiveSessionNow(s.id)}
-          onDelete={(s) =>
+          onDelete={(s, anchor) =>
             setConfirmDelete({
               type: 'session',
               id: s.id,
@@ -1219,6 +1219,7 @@ export function Sidebar() {
               acpSessionId: s.acp_session_id,
               agentId: s.agent_id,
               workspacePath: s.workspace_path,
+              anchor,
             })
           }
         />

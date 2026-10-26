@@ -1,6 +1,6 @@
 # ACP 会话历史管理：session/list 发现 · 外部会话载入 · session/delete 清理
 
-> 状态：**Phase 0 + Phase 3（后端 delete）+ Phase 4（前端删除确认勾选）已实施**（2026-10-06）；Phase 1（list）/ Phase 2（adopt）/ E1 面板 **未实施**；E3-2 的**后端端点已落地**（2026-10-09，两段式第二段复用，面板 UI 仍待 E1）；2026-10-09 三条勘误（§5.2）：E-7/E-8/E-9 无活连接由后端临时拉起补删（推翻 E-2 的「已释放 → 禁用」）、E-10 删除不阻塞界面（右下角 toast 上报）、E-11 拆两段式（`pending` + agent 侧删除端点，E-7 的「请求内拉起」被取代）
+> 状态：**Phase 0 + Phase 3（后端 delete）+ Phase 4（前端删除确认勾选）已实施**（2026-10-06）；Phase 1（list）/ Phase 2（adopt）/ E1 面板 **未实施**；E3-2 的**后端端点已落地**（2026-10-09，两段式第二段复用，面板 UI 仍待 E1）；2026-10-09 三条勘误（§5.2）：E-7/E-8/E-9 无活连接由后端临时拉起补删（推翻 E-2 的「已释放 → 禁用」）、E-10 删除不阻塞界面（右下角 toast 上报）、E-11 拆两段式（`pending` + agent 侧删除端点，E-7 的「请求内拉起」被取代）；2026-10-25 E-12 单条会话删除确认改锚定气泡（业务语义不变）
 > 触发条件：补足 omniterm 侧对「agent 侧 ACP 会话历史」的发现 / 读取 / 删除能力（2026-10-04 盘点结论：ACP 11 个 session 命令 omniterm 只用 5 个，`session/list` / `session/delete` 零引用）
 > 关联：`docs/reference/acp-protocol-reference.md`（§17.3 实探结论）、`docs/dev/plans/archive/2026-09-10-sidebar-session-context-menu.md`（菜单 / 批量确认范式）、`docs/architecture/frontend-patterns.md`（sidebar 弹出面板约定）、`docs/dev/plans/archive/2026-10-01-acp-sdk-v2-upgrade.md`（SDK 2.2 + V1 握手背景）
 
@@ -173,6 +173,7 @@ purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，
 | E-9 | 活连接路径只看 `dispose` 是否拿到 client | 拿到 client 后加 `is_alive()` 判断：连接已死（agent 崩溃 / poll 卡死）时先收尸再落回临时拉起 | 「注册表里有个死句柄」不该成为 skipped 的理由——与 E-7 同一原则 |
 | E-10 | 会话删除（单条 / 批量）在模态内 `await` 请求：agent 侧临时拉起期间弹窗转圈、界面被扣住 | 确认后**立即关弹窗**，请求转后台执行；结果（会话已删 / agent 侧 `deleted` / `skipped`）完成后由右下角 toast 如实上报；列表由完成刷新 + 侧栏 3s 轮询收走。批量同时移除 `submitting` 阻断与「执行中不可关闭」守卫（弹窗已立即关闭，守卫无对象） | 用户指令（2026-10-09）：「删除 agent 侧聊天过程中不要卡用户的前端界面，右下角如实上报即可」——agent 侧删除秒级起步，把等待成本转嫁给用户没有任何收益；`archiveSessionNow` 已有「先关弹窗、后报结果」先例 |
 | E-11 | E-7 的「无活连接就在删会话请求内临时拉起」：响应最长等 30s（15s spawn + 15s RPC），「已删除」也被拖住 | 拆**两段式**：第一段 `DELETE /sessions/{id}` 不再 spawn，立即返回 `agent_side:"pending"`；前端随即带会话行上下文补发**第二段端点** `DELETE /agents/{id}/acp-sessions/{acp_session_id}?cwd=`（E3-2 原语提前落地）临时拉起补删，结果补报；失败/缺上下文降级 `skipped`。`agent_side` 协议值增 `pending`；`cleanup_session_runtime` / `AgentSideDelete` 回到「只认 `acp_session_id`」 | 用户指令（2026-10-09）「做便宜的」= 评估里的方案 C：无服务端状态（不做 job 表 / 轮询 / 全局推送通道）。实测 opencode：第一段 4ms `pending`、第二段 0.84s `deleted`（对比 E-7 末期单请求 1.08s 且「已删」toast 被拖到末尾）；翻盘条件：出现「关标签页也要完成 agent 侧删除」的强诉求 → 回到服务端后台任务方案（需结果通道） |
+| E-12 | 单条会话删除的确认层是 Modal（`ConfirmDialog`） | 单条会话删除改为贴着行内删除按钮的**锚定气泡**（`PopoverConfirm`），`DeleteTarget` 随行内按钮的视口矩形快照（`anchor`）定位；项目删除与批量删除仍是 Modal。勾选判据、偏好记忆、确认后立即关闭、两段式补报全部不变 | 用户指令（2026-10-25）：「会话删除的二次确认改成 pop，而不是弹窗」——单条动作应保留侧栏上下文，不该用全屏遮罩；批量是多目标且需承载跳过说明，保留 Modal |
 
 **验收（fake agent 真链路 + 单测）**：
 - `api::sessions::ephemeral_agent_delete_tests` 三条全绿：拉起 → `session/delete`

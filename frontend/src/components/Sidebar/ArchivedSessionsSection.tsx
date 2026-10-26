@@ -4,6 +4,7 @@ import type { Session } from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
 import { useAgentStore } from '../../stores/agentStore'
 import { sessionDisplayName } from '../../utils/sessionDisplayName'
+import { popoverAnchor, type PopoverAnchor } from '../../utils/popover'
 import { IconTrash, IconRefresh } from '../FileManager/icons'
 
 /**
@@ -17,7 +18,8 @@ export function ArchivedSessionsSection(props: {
   sessions: Session[]
   onOpen: (session: Session) => void
   onUnarchive: (session: Session) => void
-  onDelete: (session: Session) => void
+  /** Delete 确认是锚定气泡：带回按钮点击时的视口矩形。 */
+  onDelete: (session: Session, anchor: PopoverAnchor) => void
 }) {
   const { t } = useTranslation()
   const projects = useAppStore((s) => s.projects)
@@ -87,7 +89,7 @@ export function ArchivedSessionsSection(props: {
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
-                    props.onDelete(s)
+                    props.onDelete(s, popoverAnchor(e.currentTarget))
                   }}
                   className="row-action flex-shrink-0 flex items-center justify-center transition-all archived-delete-btn"
                   title={t('sidebar.delete') ?? 'Delete'}
