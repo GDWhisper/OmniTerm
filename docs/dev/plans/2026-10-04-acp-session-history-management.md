@@ -51,6 +51,7 @@ pi-acp），但**用户的主力 agent codebuddy 未声明** → 勾选框对其
 - **链路**：`POST /projects/{pid}/sessions` 带新可选字段 `acp_session_id`（`runtime_kind=acp`、`agent_id` 原样必填）→ 后端**跳过 spawn 与 `session/new`**，只写库行绑定该 id（`name` 缺省用面板行 `title`）→ 前端 `activateSession` → ChatView 挂载连 WS → 后端发现 supervisor 无 client → released 态 → 用户点「恢复会话」（或首个 prompt 自动恢复）→ 既有 `restore_acp_session` → `spawn_and_load` → `session/load` 重放 → `replay_start/replay_end` → 前端 sync 落库（`src/ws/acp.rs:793-870` 全链路已存在）。
 - **原因**：读历史的重放 machinery 已完整且经过多轮加固（ghost 行 / 对齐写回 / 门控），本方案对它**零改动**；create 时直接 load 不可行——HTTP create 没有 WS 订阅者，重放帧无人接收（ws restore 的重放转发任务必须在 WS handler 内起）。
 - **已纳管行**：点击 = `activateSession` 切过去（与侧栏行行为一致）。
+- **另一入口形态（2026-10-26 设计，已搁置）**：`backlog/2026-10-26-acp-adopt-history-empty-state.md` 提出**聊天空态**入口（新建 ACP 会话后，首句之前的空态中央挂「载入历史会话」→ 就地展开 agent 侧历史 → 点条即**改绑当前会话行**并复用既有 restore 链路重放）。与本 E2 的差异只在**入口位置**与**产物语义**（E2 = 面板发起 → 建新行；空态入口 = 改绑当前行），后端原语（把某行绑定到既有 `acp_session_id`）可共用。该文已把 ADR 定死（D1 改绑 / D3 只允许同 cwd / D6 同 id 不得被两行绑定 / D7 不提前 dispose 旧 client），**其 Phase 0「`session/load` 实现支持度实探」是本文 E2 的共同前置且尚未做**（协议参考只记 v2 的 `session/resume`，语义不同）。⚠️ 本段「`name` 缺省用面板行 `title`」与 `2026-10-16` 计划的标题双列不变式冲突（`name` 非空即用户手写、不可被 agent 标题覆盖；agent 侧标题应写 `agent_title`）——实施前须先在此就地加勘误块纠正。
 
 ### E3 · 删除 agent 侧记录 — 删除确认弹窗勾选 + 面板行内删除
 
