@@ -15,6 +15,7 @@ import { AgentSettings } from './AgentSettings'
 import { AiCommitSection } from './AiCommitSection'
 import { AuthSection } from './AuthSection'
 import { AuditLogSection } from './AuditLogSection'
+import { ProxySection } from './ProxySection'
 import { DesktopNotificationSection } from './DesktopNotificationSection'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { SectionTitle, ToggleRow } from './toggleRow'
@@ -976,7 +977,7 @@ const CATEGORIES: Category[] = [
   {
     id: 'auth',
     labelKey: 'settings.category.auth',
-    groups: [[AuthSection], [AuditLogSection]],
+    groups: [[AuthSection], [ProxySection], [AuditLogSection]],
   },
   {
     id: 'terminal',

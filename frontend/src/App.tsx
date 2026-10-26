@@ -9,7 +9,7 @@ import { useImmersive } from './hooks/useImmersive'
 import { useThemeStore } from './stores/themeStore'
 import { useAppStore } from './stores/appStore'
 import { api } from './api/client'
-import { setProxyDomain } from './utils/proxyUrl'
+import { setProxyDomain, setProxyEnabled } from './utils/proxyUrl'
 
 function App() {
   useMobileDetection()
@@ -68,7 +68,14 @@ function App() {
   useEffect(() => {
     // 子域名代理 base：`/system/info` 的 `proxy_domain`（null = 未启用，回退路径前缀）。
     // 首次渲染未加载时 rewriteLocalUrl 自然回退路径前缀，加载后切子域名（链接在点击时才调用，无需重渲染）。
-    api.systemInfo().then((res) => setProxyDomain(res.proxy_domain ?? null)).catch(() => {})
+    // `proxy_enabled`（P4）：全局关闭时链接不再重写；旧后端缺省按 true（保持原行为）。
+    api
+      .systemInfo()
+      .then((res) => {
+        setProxyDomain(res.proxy_domain ?? null)
+        setProxyEnabled(res.proxy_enabled ?? true)
+      })
+      .catch(() => {})
   }, [])
 
   useEffect(() => {

@@ -15,7 +15,8 @@
  *    （D1 翻盘，见 plan `2026-08-13-port-forward-proxy.md` 子域名方案）；需可通配符解析的域名。
  *
  * `proxyDomain` 由 App 启动时 fetch `/api/v1/system/info` 的 `proxy_domain` 字段注入
- * （见 `App.tsx`），`null` 表示未启用子域名（回退路径前缀）。
+ * （见 `App.tsx`），`null` 表示未启用子域名（回退路径前缀）。`proxy_enabled` 同理：
+ * 代理全局关闭时本函数直接返回 `null`，不再生成任何代理 URL（P4）。
  *
  * 端口范围与后端白名单对齐（3000..=65535）；黑名单（3306 等）与自身端口由后端拒绝
  * （403），前端只做基础范围过滤，避免无意义的 `window.open`。
@@ -24,15 +25,27 @@
  */
 
 let proxyDomain: string | null = null
+/** 代理全局开关（P4）：关闭后不再重写本机链接，由 App 从 `/system/info` 注入。 */
+let proxyEnabled = true
+
+/** 与后端 `ALLOWED_PORT_RANGE` 对齐的基础端口范围（前端只做无意义 open 的预过滤）。 */
+export const PROXY_MIN_PORT = 3000
+export const PROXY_MAX_PORT = 65535
 
 /** 设置子域名代理 base（如 `omniterm.lan`）。`null` 回退路径前缀代理。 */
 export function setProxyDomain(domain: string | null): void {
   proxyDomain = domain
 }
 
+/** 设置代理全局开关。关闭时 `rewriteLocalUrl` 一律返回 null（同机可直接访问 localhost）。 */
+export function setProxyEnabled(enabled: boolean): void {
+  proxyEnabled = enabled
+}
+
 export function rewriteLocalUrl(raw: string): string | null {
   const url = raw.trim()
   if (!url) return null
+  if (!proxyEnabled) return null
 
   // 带 scheme：http(s)://localhost:port/... | 127.0.0.1 | 0.0.0.0
   const withScheme = /^(https?):\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{1,5})([/?#].*)?$/i.exec(
@@ -54,7 +67,7 @@ export function rewriteLocalUrl(raw: string): string | null {
 function buildProxy(port: string, rest: string | undefined): string | null {
   const n = Number(port)
   // 与后端 ALLOWED_PORT_RANGE 对齐；黑名单/自身端口交给后端 403 兜底。
-  if (n < 3000 || n > 65535) return null
+  if (n < PROXY_MIN_PORT || n > PROXY_MAX_PORT) return null
 
   if (proxyDomain) {
     // 子域名：继承当前协议（http 部署得 http，https 反代部署得 https，见 §8 多实现兼容）。
