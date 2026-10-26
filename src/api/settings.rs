@@ -39,6 +39,44 @@ pub fn routes() -> Router<AppState> {
         .route("/settings/audit-log", get(get_audit_log))
 }
 
+/// 读取一个 `settings` key。缺失返回 `None`，DB 错误上抛。
+///
+/// 单一真源：settings 是纯 KV 表，读写 SQL 不得在各 handler / 启动路径各抄一份。
+pub(crate) async fn get_setting(
+    pool: &sqlx::SqlitePool,
+    key: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+        .bind(key)
+        .fetch_optional(pool)
+        .await
+}
+
+/// 在一个事务内批量 upsert settings key：全部成功才提交，避免多 key 配置半写入。
+pub(crate) async fn upsert_settings(
+    pool: &sqlx::SqlitePool,
+    pairs: &[(&str, String)],
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    for (key, value) in pairs {
+        sqlx::query(
+            "INSERT INTO settings (key, value) VALUES (?, ?) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await
+}
+
+/// 删除一个 `settings` key（不存在时成功返回）。
+pub(crate) async fn delete_setting(pool: &sqlx::SqlitePool, key: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM settings WHERE key = ?").bind(key).execute(pool).await?;
+    Ok(())
+}
+
 #[derive(Deserialize)]
 struct SetAcpIdleRecycleRequest {
     minutes: u64,
@@ -57,13 +95,9 @@ struct SetPermissionTimeoutRequest {
 async fn get_acp_idle_recycle(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let value: Option<String> = sqlx::query_scalar::<_, String>(&format!(
-        "SELECT value FROM settings WHERE key = '{}'",
-        KEY_ACP_IDLE_RECYCLE_MIN
-    ))
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let value = get_setting(&state.db, KEY_ACP_IDLE_RECYCLE_MIN)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let minutes = value
         .as_deref()
@@ -82,15 +116,9 @@ async fn set_acp_idle_recycle(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    sqlx::query(&format!(
-        "INSERT INTO settings (key, value) VALUES ('{}', ?) \
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        KEY_ACP_IDLE_RECYCLE_MIN
-    ))
-    .bind(req.minutes.to_string())
-    .execute(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    upsert_settings(&state.db, &[(KEY_ACP_IDLE_RECYCLE_MIN, req.minutes.to_string())])
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     state.acp_idle_recycle_secs.store(req.minutes * 60, Ordering::Relaxed);
     Ok(Json(json!({ "minutes": req.minutes })))
@@ -101,28 +129,12 @@ async fn set_acp_idle_recycle(
 async fn get_permission_timeout(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let mode_raw: Option<String> = sqlx::query_scalar::<_, String>(&format!(
-        "SELECT value FROM settings WHERE key = '{}'",
-        KEY_ACP_PERM_TIMEOUT_MODE
-    ))
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let secs_raw: Option<String> = sqlx::query_scalar::<_, String>(&format!(
-        "SELECT value FROM settings WHERE key = '{}'",
-        KEY_ACP_PERM_TIMEOUT_SECS
-    ))
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db_error = |_| StatusCode::INTERNAL_SERVER_ERROR;
+    let mode_raw = get_setting(&state.db, KEY_ACP_PERM_TIMEOUT_MODE).await.map_err(db_error)?;
+    let secs_raw = get_setting(&state.db, KEY_ACP_PERM_TIMEOUT_SECS).await.map_err(db_error)?;
     // 2026-10-01 前的分钟制记录兜底：秒制 key 缺失时才读（见 KEY_…_MIN_LEGACY）。
-    let legacy_min_raw: Option<String> = sqlx::query_scalar::<_, String>(&format!(
-        "SELECT value FROM settings WHERE key = '{}'",
-        KEY_ACP_PERM_TIMEOUT_MIN_LEGACY
-    ))
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let legacy_min_raw =
+        get_setting(&state.db, KEY_ACP_PERM_TIMEOUT_MIN_LEGACY).await.map_err(db_error)?;
 
     let mode =
         mode_raw.as_deref().and_then(PermissionTimeoutMode::from_str_opt).unwrap_or_default();
@@ -147,24 +159,18 @@ async fn set_permission_timeout(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    for (key, value) in [
-        (KEY_ACP_PERM_TIMEOUT_MODE, mode.as_str().to_string()),
-        (KEY_ACP_PERM_TIMEOUT_SECS, req.seconds.to_string()),
-    ] {
-        sqlx::query(&format!(
-            "INSERT INTO settings (key, value) VALUES ('{}', ?) \
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            key
-        ))
-        .bind(value)
-        .execute(&state.db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
+    upsert_settings(
+        &state.db,
+        &[
+            (KEY_ACP_PERM_TIMEOUT_MODE, mode.as_str().to_string()),
+            (KEY_ACP_PERM_TIMEOUT_SECS, req.seconds.to_string()),
+        ],
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     // 清理分钟制旧 key：避免 DB 里留下一个会误导排查的过期记录
     // （GET 的兼容回退只在新 key 缺失时生效，删掉后彻底闭环）。
-    sqlx::query(&format!("DELETE FROM settings WHERE key = '{}'", KEY_ACP_PERM_TIMEOUT_MIN_LEGACY))
-        .execute(&state.db)
+    delete_setting(&state.db, KEY_ACP_PERM_TIMEOUT_MIN_LEGACY)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
