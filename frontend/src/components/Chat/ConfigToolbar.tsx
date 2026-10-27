@@ -26,6 +26,22 @@ const MOBILE_CONTROL_HEIGHT = 30
 /** 「高级」面板内容区最大高度：选项多时不向上顶穿聊天视口。 */
 const ADVANCED_MAX_HEIGHT = 320
 
+/** 全角字符（CJK / 假名 / 全角符号）：同字号下约占两个半角宽。 */
+const FULL_WIDTH_CHARS = /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFF00-\uFF60]/g
+
+/** 行内项分配富余宽度的权重 = 当前值文案的视觉宽度（半角 1、全角 2）。
+ *
+ * 移动端行内项用 `flex: <权重> <shrink> auto`：basis 取自然宽（覆盖箭头、内边距
+ * 这类固定 chrome），富余部分再按文案长度分。于是长值（模型名）拿到大头，短值
+ * （思考等级 Off/High）只占自然宽——等分（旧 `1 1 0`）会让 3 个短词白占同样
+ * 一份，把模型名截成残句（360px 下只剩约 80px，思考等级却拿到同宽）。
+ */
+function inlineGrowWeight(option: ConfigOption): number {
+  const current = option.options.find((o) => o.value === option.currentValue)
+  const label = current?.name ?? option.currentValue
+  return Math.max(1, label.length + (label.match(FULL_WIDTH_CHARS)?.length ?? 0))
+}
+
 /** 按类别优先级把配置项切成「行内主位」与「收纳」两组。
  *
  * 主位只收 PRIMARY_CATEGORIES 内的类别、每类至多第一个（调用方传入的
@@ -61,12 +77,18 @@ function ConfigDropdown({
   onSelect,
   readOnly = false,
   compact = false,
+  grow = 1,
+  shrink = 1,
 }: {
   option: ConfigOption
   onSelect: (configId: string, value: string) => void
   readOnly?: boolean
   /** 移动端紧凑态：去掉类别前缀、固定触摸目标高度、当前值超宽省略。 */
   compact?: boolean
+  /** 紧凑态下分配富余宽度的权重（见 inlineGrowWeight）。 */
+  grow?: number
+  /** 紧凑态下溢出时的收缩权重：只给最长值（见 ConfigToolbar 的 maxWeight）。 */
+  shrink?: number
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -111,12 +133,15 @@ function ConfigDropdown({
       ref={ref}
       style={{
         position: 'relative',
-        // 紧凑态等分剩余宽度（flex-basis 0）：三个行内项各拿一份，最长的值名
-        // 截断最多，短值（Ask/Off）不被牺牲。若用默认的按基准宽度比例收缩，
-        // 长模型名会把「Always Ask」这类短值一起拖到截断。
+        // 紧凑态按内容分配宽度：basis 用自然宽（覆盖箭头/内边距等固定 chrome），
+        // 富余部分按 `grow` 权重（= 当前值文案视觉宽度）分给各项，长值拿大头，
+        // 短值不再白占一份——见 inlineGrowWeight。shrink 只给最长值、其余为 0：
+        // 短值的 basis 恰是自然宽，哪怕收 1px 也会出省略号（「Always Ask」→
+        // 「Always A…」），溢出必须由长值独吞；它 min-width 0 可一路让到 0，
+        // 真实视口（≥320px）下不存在让无可让仍溢出的情形。
         // 注意 min-width 必须显式 0：弹性子项默认 min-width:auto，而当前值
         // nowrap，不给 0 按钮拒绝收缩、整行只能换行（实测 360px 换两行）。
-        flex: compact ? '1 1 0' : undefined,
+        flex: compact ? `${grow} ${shrink} auto` : undefined,
         minWidth: compact ? 0 : undefined,
       }}
     >
@@ -575,6 +600,9 @@ export function ConfigToolbar({
   // 非 权限/模型/思考 类别（模型参数、布尔开关、未知类别）在桌面端既不进行
   // 内、也不进面板——配置项直接消失，而移动端却能在「高级」里看到。
   const inlineOptions = isMobile ? primary : [...primary, ...advanced]
+  // 溢出时只让最长值先省略：shrink 权重集中给它，其余项为 0（短值收 1px 就会出省略号）。
+  const weights = inlineOptions.map(inlineGrowWeight)
+  const maxWeight = Math.max(...weights, 1)
 
   return (
     <div
@@ -594,13 +622,15 @@ export function ConfigToolbar({
         position: 'relative',
       }}
     >
-      {inlineOptions.map((opt) => (
+      {inlineOptions.map((opt, i) => (
         <ConfigDropdown
           key={opt.id}
           option={opt}
           onSelect={onSetConfigOption}
           readOnly={readOnly}
           compact={isMobile}
+          grow={weights[i]}
+          shrink={weights[i] === maxWeight ? weights[i] : 0}
         />
       ))}
       {showAdvanced && (

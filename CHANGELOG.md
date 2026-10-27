@@ -55,6 +55,7 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- [frontend] 移动端 ACP 配置栏（权限模式 / 模型 / 思考等级）行内宽度由等分改为按当前值文案的视觉宽度自适应：富余空间优先给长值（模型名不再被等分截成残句），短值只占自然宽不再白占一份；整行确实装不下时由最长值独自省略，短值保持完整可读（`frontend/src/components/Chat/ConfigToolbar.tsx`） (2026-10-27 07:29)
 - [frontend] 单条会话删除的二次确认由全屏模态改为贴着行内删除按钮的锚定气泡（PopoverConfirm）：点外部 / Esc / 滚动即关闭，ACP 的「同时永久删除 agent 侧记录」勾选与删除后 toast 语义不变；项目删除与批量删除仍为弹窗（2026-10-25 22:32）
 
 ### Fixed

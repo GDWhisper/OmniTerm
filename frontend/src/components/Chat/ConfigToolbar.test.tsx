@@ -310,6 +310,36 @@ describe('ConfigToolbar mobile overflow', () => {
     render({ mobile: false, options: OVERFLOW_OPTIONS })
     expect((container.firstElementChild as HTMLElement).style.flexWrap).toBe('wrap')
   })
+
+  // 行内宽度按「当前值文案视觉宽度」分配，不再等分：短值（Ask/High）只占自然宽，
+  // 富余空间归长值（模型名）。basis 必须是 auto（自然宽）——固定 chrome（箭头、
+  // 内边距）若参与等分，短值反而会被挤到截断。jsdom 不做布局，只钉 flex 契约。
+  it('weights the leftover width by value length instead of splitting it evenly', () => {
+    render({ mobile: true, options: [MODE_OPTION, MODEL_OPTION, THOUGHT_OPTION] })
+
+    const wrapperOf = (text: string) => findButton(text)!.parentElement as HTMLElement
+    // grow = 文案长度：'model-0' 7 / 'High' 4 / 'Ask' 3；shrink 只给最长值
+    // （溢出时由它独吞，短值保持完整可读——短值收 1px 就会出省略号），其余为 0。
+    expect(wrapperOf('model-0').style.flex).toBe('7 7 auto')
+    expect(wrapperOf('High').style.flex).toBe('4 0 auto')
+    expect(wrapperOf('Ask').style.flex).toBe('3 0 auto')
+  })
+
+  it('counts full-width CJK values as two columns when weighting', () => {
+    const zhThought: ConfigOption = {
+      ...THOUGHT_OPTION,
+      options: [{ value: 'high', name: '高' }],
+    }
+    render({ mobile: true, options: [zhThought] })
+
+    expect((findButton('高')!.parentElement as HTMLElement).style.flex).toBe('2 2 auto')
+  })
+
+  it('leaves desktop triggers at their natural width (no flex weighting)', () => {
+    render({ mobile: false, options: [MODE_OPTION, MODEL_OPTION, THOUGHT_OPTION] })
+
+    expect((findButton('Mode:')!.parentElement as HTMLElement).style.flex).toBe('')
+  })
 })
 
 // ── 同名选项的 description（模型消耗倍率）：只在展开的选项列表可见 ──────
