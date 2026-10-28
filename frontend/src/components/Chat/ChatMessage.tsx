@@ -693,7 +693,9 @@ function TextBlockView({
     >
       <Markdown text={text} streaming={streaming} />
       {caret && <span className="chat-streaming-caret" />}
-      {!streaming && <BlockCopyButton text={text} />}
+      {/* 气泡**不挂**块级复制角标（2026-10-28 用户要求）：消息动作栏已有「复制」
+          与「复制为 Markdown」，气泡角标与之重复，且会与代码块自己的复制按钮
+          抢右上角。代码块的复制入口在 FencedCodeBlock 内部。 */}
     </div>
   )
 }

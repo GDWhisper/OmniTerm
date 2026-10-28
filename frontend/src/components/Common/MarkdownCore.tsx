@@ -1,11 +1,15 @@
 import { useMemo, type CSSProperties, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { useTranslation } from 'react-i18next'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { READER_FONT } from '../../utils/fonts'
 import { inlineCodeBaseStyle } from '../../utils/inlineCodeStyle'
 import { rewriteLocalUrl } from '../../utils/proxyUrl'
+import { copyText } from '../../utils/clipboard'
+import { useToastStore } from '../../stores/toastStore'
+import { IconCopy } from '../FileManager/icons'
 
 /**
  * Markdown 渲染核心 —— 聊天面板与文件抽屉共用同一套 element renderer。
@@ -67,21 +71,42 @@ export function FencedCodeBlock({
   className?: string
   children?: ReactNode
 }) {
+  const { t } = useTranslation()
   const match = /language-(\w+)/.exec(className || '')
   const codeStr = String(children).replace(/\n$/, '')
   return (
-    // 横向滚动面：超宽 agent 输出在手机上得左右滚看全貌。oneDark 的 pre
-    // 规则自带 overflow:auto，这里补 data-x-scroll 让移动端切屏手势抬手
-    // （index.css 同步放开 touch-action）。
-    <SyntaxHighlighter
-      style={oneDark}
-      language={match?.[1] ?? 'text'}
-      PreTag="div"
-      data-x-scroll=""
-      customStyle={{ margin: '8px 0', fontSize: '0.923em' }}
-    >
-      {codeStr}
-    </SyntaxHighlighter>
+    // 复制角标的定位父元素：外层不滚动（横向滚动在 SyntaxHighlighter 的 pre 里），
+    // 角标因此恒贴在代码块可见区右上角，横向滚走内容也不会被带走。
+    <div className="md-code-block">
+      {/* 横向滚动面：超宽 agent 输出在手机上得左右滚看全貌。oneDark 的 pre
+          规则自带 overflow:auto，这里补 data-x-scroll 让移动端切屏手势抬手
+          （index.css 同步放开 touch-action）。 */}
+      <SyntaxHighlighter
+        style={oneDark}
+        language={match?.[1] ?? 'text'}
+        PreTag="div"
+        data-x-scroll=""
+        customStyle={{ margin: 0, fontSize: '0.923em' }}
+      >
+        {codeStr}
+      </SyntaxHighlighter>
+      <button
+        type="button"
+        className="md-code-copy-btn"
+        title={t('markdown.copyCode')}
+        aria-label={t('markdown.copyCode')}
+        onClick={() => {
+          void copyText(codeStr).then((ok) => {
+            useToastStore.getState().addToast(
+              ok ? 'success' : 'error',
+              ok ? t('markdown.copyCodeSuccess') : t('markdown.copyFailed'),
+            )
+          })
+        }}
+      >
+        <IconCopy style={{ width: 12, height: 12, verticalAlign: 'text-bottom' }} />
+      </button>
+    </div>
   )
 }
 

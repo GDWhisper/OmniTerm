@@ -652,6 +652,11 @@ ACP 聊天流的「说话气泡」（user + assistant 正文）统一为像素�
 `codeRadius` / `inlineCodeRadius` 旋钮已随本次像素化删除（`Common/MarkdownCore`），
 **勿重新引入非零圆角或半径 props**。
 
+**代码块复制角标**（`FencedCodeBlock` 的 `.md-code-copy-btn`）：贴在围栏块右上角（内缩 6px，
+22px 见方），hover / 键盘聚焦才亮，触屏无 hover 时常显半透明。配色用固定浅色而非主题变量
+——代码块底色恒为 oneDark 深色，与界面明暗无关。复制内容是代码原文（去掉尾部换行），
+**气泡本身不挂块级复制角标**（整条消息走动作栏的「复制 / 复制为 Markdown」）。
+
 ---
 
 ### 7.9 思考块（`ThoughtBlockView`）排版与折叠态

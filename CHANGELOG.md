@@ -51,9 +51,12 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- [frontend] 围栏代码块右上角新增复制按钮：hover / 键盘聚焦时显示（触屏常显半透明），复制代码原文（去掉尾部换行）并 toast 提示；复制入口由此从「聊天气泡的块级角标」改为代码块自身（`frontend/src/components/Common/MarkdownCore.tsx`、`frontend/src/index.css`） (2026-10-28 09:18)
 - [backend] 端口转发代理安全加固（P4）：设置页可全局开关代理、在「安全范围 / 仅放行清单」间切换（清单 ≤64 条，黑名单与 OmniTerm 自身端口不可放行）；新增 `proxy_denied`（仅认证态、按端口+原因去重、上限 256）与 `proxy_settings_changed` 审计；子域名 WS 收敛到统一入口并补首访审计；关闭代理后前端不再重写 localhost 链接（2026-10-26 07:59）
 
 ### Changed
+
+- [frontend] 聊天气泡不再挂块级复制角标（与消息动作栏的「复制 / 复制为 Markdown」重复，且会压住代码块自己的复制按钮）；思考块与工具卡仍各自保留（复制内容不同） (2026-10-28 09:18)
 
 - [frontend] 移动端 ACP 配置栏（权限模式 / 模型 / 思考等级）行内宽度由等分改为按当前值文案的视觉宽度自适应：富余空间优先给长值（模型名不再被等分截成残句），短值只占自然宽不再白占一份；整行确实装不下时由最长值独自省略，短值保持完整可读（`frontend/src/components/Chat/ConfigToolbar.tsx`） (2026-10-27 07:29)
 - [frontend] 单条会话删除的二次确认由全屏模态改为贴着行内删除按钮的锚定气泡（PopoverConfirm）：点外部 / Esc / 滚动即关闭，ACP 的「同时永久删除 agent 侧记录」勾选与删除后 toast 语义不变；项目删除与批量删除仍为弹窗（2026-10-25 22:32）
