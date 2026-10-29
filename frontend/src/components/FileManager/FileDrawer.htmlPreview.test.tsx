@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createRoot } from 'react-dom/client'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
 import { I18nextProvider } from 'react-i18next'
 import i18n from '../../i18n'
@@ -33,10 +33,25 @@ const HTML_DOC = [
 
 const noop = () => {}
 
+/** 本文件挂载的 root 统一在 afterEach 卸载：FileDrawer 内的 FileEditor 带搜索
+ *  防抖定时器（SEARCH_INPUT_DEBOUNCE_MS），不卸载会在测试文件结束后才触发
+ *  setState——此时 jsdom 环境已销毁，报 `window is not defined` 让全量测试
+ *  以 unhandled error 失败（pre-commit 实测）。 */
+let mounted: { root: Root; container: HTMLElement }[] = []
+
+afterEach(() => {
+  act(() => {
+    for (const m of mounted) m.root.unmount()
+  })
+  for (const m of mounted) m.container.remove()
+  mounted = []
+})
+
 function renderDrawer(filePath: string, initialMode: 'view' | 'edit' = 'view') {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
+  mounted.push({ root, container })
   act(() => {
     root.render(
       <I18nextProvider i18n={i18n}>
