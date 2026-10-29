@@ -181,7 +181,7 @@ describe('Sidebar 会话展开模式（expandAllSessions）', () => {
     })
   })
 
-  it('标题栏 toggle：模式 2 显示 IconEye；点击切到模式 1 显示 ⤢ + accent 高亮 + tooltip 正确', async () => {
+  it('标题栏 toggle：模式 2 显示 IconEye；点击切到模式 1 显示展开图标 + accent 高亮 + tooltip 正确', async () => {
     renderSidebar()
 
     await vi.waitFor(() => {
@@ -192,7 +192,7 @@ describe('Sidebar 会话展开模式（expandAllSessions）', () => {
     expect(toggleBtn).toBeTruthy()
     // 模式 2：IconEye（svg）、无高亮、tooltip 为「仅聚焦」
     expect(toggleBtn.querySelector('svg')).toBeTruthy()
-    expect(toggleBtn.textContent).not.toContain('⤢')
+    expect(toggleBtn.textContent).toBe('')
     expect(toggleBtn.getAttribute('title')).toBe(
       'Session expansion: focused worktree only (click to expand all)'
     )
@@ -205,11 +205,14 @@ describe('Sidebar 会话展开模式（expandAllSessions）', () => {
     // 等 DOM 反映模式 1（按钮内容/高亮/tooltip 随重渲染更新）
     await vi.waitFor(() => {
       const btn = container.querySelector('button[title*="Session expansion"]') as HTMLElement
-      expect(btn.textContent).toContain('⤢')
+      expect(btn.querySelector('svg')).toBeTruthy()
+      expect(btn.textContent).toBe('')
     })
     const toggleBtnOn = container.querySelector('button[title*="Session expansion"]') as HTMLElement
-    expect(toggleBtnOn.textContent).toContain('⤢')
-    expect(toggleBtnOn.querySelector('svg')).toBeFalsy()
+    // 模式 1：仍是 svg 图标（禁止回退成 ⤢ 文本字形——字体缺字形时各平台
+    // 渲染成豆腐块/大小不一的备用字形，移动端尤其明显）
+    expect(toggleBtnOn.querySelector('svg')).toBeTruthy()
+    expect(toggleBtnOn.textContent).toBe('')
     expect(toggleBtnOn.style.color).toBe('var(--accent)')
     expect(toggleBtnOn.getAttribute('title')).toBe(
       'Session expansion: all worktrees with sessions (click for focused only)'
