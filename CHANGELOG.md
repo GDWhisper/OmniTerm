@@ -47,7 +47,7 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [Unreleased]
+## [0.3.7] - 2026-10-28
 
 ### Added
 
@@ -58,12 +58,12 @@ Prefix each entry with the area it affects:
 
 - [frontend] 移动端底部配置栏的模型按钮不再「右截断 + ……」：溢出时右缘改为渐隐（不再显示省略号，硬边被吃掉），当前值以 20px/s 慢速往返轮播，完整模型名有机会被读完；下拉展开时暂停滚动（选项列表里已能看到完整名字），系统开启「减少动态效果」时只保留渐隐（`frontend/src/components/Chat/ConfigToolbar.tsx`、`frontend/src/index.css`） (2026-10-28 20:51)
 - [frontend] 聊天气泡不再挂块级复制角标（与消息动作栏的「复制 / 复制为 Markdown」重复，且会压住代码块自己的复制按钮）；思考块与工具卡仍各自保留（复制内容不同） (2026-10-28 09:18)
-
 - [frontend] 移动端 ACP 配置栏（权限模式 / 模型 / 思考等级）行内宽度由等分改为按当前值文案的视觉宽度自适应：富余空间优先给长值（模型名不再被等分截成残句），短值只占自然宽不再白占一份；整行确实装不下时由最长值独自省略，短值保持完整可读（`frontend/src/components/Chat/ConfigToolbar.tsx`） (2026-10-27 07:29)
 - [frontend] 单条会话删除的二次确认由全屏模态改为贴着行内删除按钮的锚定气泡（PopoverConfirm）：点外部 / Esc / 滚动即关闭，ACP 的「同时永久删除 agent 侧记录」勾选与删除后 toast 语义不变；项目删除与批量删除仍为弹窗（2026-10-25 22:32）
 
 ### Fixed
 
+- [frontend] 移动端聊天标题栏的模式徽章加宽度上限（移动端 64px / 桌面 160px，超宽省略号 + hover 看全值）：模式 id 由 agent 自定且不可断词，此前会先吃光标题栏空间、把右侧用量与 LIVE 徽章挤到换行（`frontend/src/components/Chat/ChatView.tsx`） (2026-10-28 18:46)
 - [frontend] 侧栏「会话展开」toggle 处于全部展开态时按钮不再显示 `⤢` 文本字形：阅读字体无该字形，各平台按备用字体渲染成一小块异形标记（移动端尤明显），且与相邻「新建项目」的 16px 线性图标不同源；改用图标库的 `IconExpandAll`（对角双向箭头，`frontend/src/components/FileManager/icons.tsx`），两态均为同规格 SVG (2026-10-28 18:10)
 - [frontend] [backend] ACP 聊天里权限超时等 SYSTEM 告知不再整批沉在消息流底部把 agent 最终输出顶出视野：告知帧在 turn 帧窗口内豁免驱逐（长 turn 下去重依据不丢），独立告知行落库带所属 turn 归属并归块进该 turn 的过程容器（随过程折叠，刷新后一致）；历史数据按时间区间启发式归块，turn 失败等终态告知仍独立可见（2026-10-26 09:50）
 - [frontend] 桌面通知开关点击不再可能「毫无反应」：此前点击后的全部可见效果都押在 `Notification.requestPermission()` 的 await 之后，浏览器压制权限弹窗时该 promise 永不结算（如 Firefox 弹窗拦截吞掉权限弹窗、企业策略/隐私模式），表现为开关不翻转、状态行不更新、用户意图不记录；现用户意图同步落账（点击即翻转），请求期间状态行显示等待指引（含弹窗未出现时的排查路径：弹窗拦截/隐私模式/地址栏站点设置），且请求期间开关不禁用——可随时关闭再开重试（2026-10-25 09:30）
