@@ -202,11 +202,16 @@ describe('Sidebar 会话展开模式（expandAllSessions）', () => {
       expect(useAppStore.getState().expandAllSessions).toBe(true)
     })
 
-    // 等 DOM 反映模式 1（按钮内容/高亮/tooltip 随重渲染更新）
+    // 等 DOM 反映模式 1（按钮内容/高亮/tooltip 随重渲染更新）。
+    // 等待条件必须是**模式 1 独有**的信号：两态都是 svg 图标 + 空文本
+    // （2026-10-28 改用 IconExpandAll 后不再有文本字形可区分），用图标/文本
+    // 等待会在模式 2 的 DOM 上立即成立 → 读到未重渲染的旧按钮 → 高亮断言偶发失败。
     await vi.waitFor(() => {
       const btn = container.querySelector('button[title*="Session expansion"]') as HTMLElement
-      expect(btn.querySelector('svg')).toBeTruthy()
-      expect(btn.textContent).toBe('')
+      expect(btn.style.color).toBe('var(--accent)')
+      expect(btn.getAttribute('title')).toBe(
+        'Session expansion: all worktrees with sessions (click for focused only)',
+      )
     })
     const toggleBtnOn = container.querySelector('button[title*="Session expansion"]') as HTMLElement
     // 模式 1：仍是 svg 图标（禁止回退成 ⤢ 文本字形——字体缺字形时各平台
