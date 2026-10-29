@@ -68,6 +68,12 @@ const CHAT_DIM_IDLE_MS = 180
  *  贴底误判成「用户上翻」）。与 `useStickScroll` 的内部阈值同口径。 */
 const CHAT_STICK_THRESHOLD_PX = 24
 
+/** 标题栏模式徽章的宽度上限。模式 id 由 agent 自定（如 `bypassPermissions`），
+ *  它是标题栏里唯一不可断词的长串，不设上限会先吃光空间、把右侧用量 / LIVE
+ *  徽章挤到换行（360px 移动端实测）。超宽截断为省略号，完整值走 title。 */
+const CHAT_MODE_BADGE_MAX_W_MOBILE = 64
+const CHAT_MODE_BADGE_MAX_W_DESKTOP = 160
+
 /**
  * 移动端「离开 ≥ 该时长后回来」即补拉的阈值（E1 兜底）。
  *
@@ -1072,14 +1078,19 @@ export function ChatView() {
         <span>chat</span>
         {chatState.mode && (
           <span
+            title={chatState.mode}
             style={{
-              marginLeft: 8,
-              padding: '1px 8px',
+              marginLeft: isMobile ? 4 : 8,
+              padding: isMobile ? '1px 5px' : '1px 8px',
               fontSize: 10,
               background: 'var(--accent-14)',
               color: 'var(--accent)',
               borderRadius: 0,
               letterSpacing: '0.08em',
+              maxWidth: isMobile ? CHAT_MODE_BADGE_MAX_W_MOBILE : CHAT_MODE_BADGE_MAX_W_DESKTOP,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
             }}
           >
             {chatState.mode.toUpperCase()}
