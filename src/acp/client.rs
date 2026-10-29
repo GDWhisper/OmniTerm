@@ -641,6 +641,7 @@ async fn emit_async_task_event(
             "system",
             &text,
             Some(&blocks),
+            None,
         )
         .await
         {
@@ -1348,6 +1349,14 @@ impl AcpClient {
         // 调用方去 claim —— 这正是消除 TOCTOU 的关键：旧写法让旧调用方拿到新世代，
         // 于是新旧两轮抢同一个留痕权。
         claim_notice_for_generation(&self.last_noticed_generation, generation)
+    }
+
+    /// 当前（或刚定稿）turn 的 assistant 行 id；`None` = 无活跃 turn 或行未惰创建。
+    /// mid-turn 告知落库时用作 `turn_row_id` 归属（计划 2026-10-26 D2），与
+    /// [`TurnAccumulator::turn_row_id`] 同生命周期（`finalize_turn` 不清、
+    /// `begin_turn` 才清）。
+    pub fn current_turn_row_id(&self) -> Option<String> {
+        self.accumulator.turn_row_id()
     }
 
     /// 广播 turn 结束事件（无订阅者时静默丢弃）。

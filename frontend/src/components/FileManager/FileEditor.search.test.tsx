@@ -5,6 +5,7 @@ import { I18nextProvider } from 'react-i18next'
 import { EditorView } from '@codemirror/view'
 import i18n from '../../i18n'
 import { FileEditor } from './FileEditor'
+import * as fileSearch from './fileSearch'
 
 /**
  * 抽屉文件编辑器内搜索的行为锁定：
@@ -334,5 +335,30 @@ describe('FileEditor in-editor search', () => {
       expect(container.querySelector('.fm-editor-search-count')?.textContent).toBe('1/3')
     })
     expect(spy.mock.calls.length).toBe(callsBefore)
+  })
+
+  // 2026-10-10 计划 ④：查询输入防抖（SEARCH_INPUT_DEBOUNCE_MS=150）。computeMatches
+  // 是全文档同步扫描（+ fileSearch 的 1 万匹配上限），大文件逐键重扫会卡输入；连续
+  // 键入合并为停顿后的一次计算，受控回显仍即时。
+  it('debounces match computation: consecutive keystrokes compute once', async () => {
+    const computeSpy = vi.spyOn(fileSearch, 'computeMatches')
+    const rendered = renderEditor(NAV_SAMPLE)
+    container = rendered.container
+    root = rendered.root
+    await waitForEditor(container)
+
+    await pressCtrlF(container)
+    const input = await waitForSearchPanel(container)
+
+    // 两次键入落在同一防抖窗口内（act 同步连打，150ms 未到）。
+    await typeQuery(input, 'a')
+    await typeQuery(input, 'ap')
+
+    // 只有防抖后的最终查询触发一次计算（无防抖 = 'a'、'ap' 各一次）。
+    await vi.waitFor(() => {
+      expect(container.querySelector('.fm-editor-search-count')?.textContent).toBe('1/1')
+    })
+    expect(computeSpy).toHaveBeenCalledTimes(1)
+    expect(computeSpy.mock.calls[0][1]).toMatchObject({ query: 'ap' })
   })
 })

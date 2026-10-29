@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
+import { memo, useRef, type CSSProperties, type MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Session } from '../../api/client'
 import { sessionStatus, type AcpActivity } from '../../utils/agentAggregate'
@@ -8,10 +8,12 @@ import { useAgentStore } from '../../stores/agentStore'
 import type { AttentionReason } from '../../hooks/useAttention'
 import { useLongPress, LONG_PRESS_CLICK_SUPPRESS_MS } from '../../hooks/useLongPress'
 import { useMinuteNow } from '../../hooks/useMinuteNow'
+import { useOverflowDistance } from '../../hooks/useOverflowDistance'
 import { hapticTap } from '../../utils/haptics'
 import { ArchiveButton, DeleteButton, ReleaseButton } from './RowActionButtons'
 import type { DeleteTarget } from './DeleteConfirmDialog'
 import type { ContextMenuPoint } from '../Common/ContextMenu'
+import { popoverAnchor } from '../../utils/popover'
 
 const MARQUEE_PX_PER_SECOND = 25
 const MARQUEE_MIN_SECONDS = 6
@@ -109,22 +111,11 @@ export const SessionRow = memo(function SessionRow({
         : t(AGE_LABEL_KEYS[age.unit], { value: age.value })
 
   const titleRef = useRef<HTMLSpanElement>(null)
-  const [titleOverflow, setTitleOverflow] = useState(0)
-
-  // 标题溢出测量：hover 时行尾时间槽会扩展为动作按钮槽，标题可用宽度随之
-  // 变化，ResizeObserver 会在这一拍补测，marquee 距离始终以当前宽度为准。
-  useLayoutEffect(() => {
-    const el = titleRef.current
-    if (!el) return
-    const measure = () => {
-      const next = Math.max(0, el.scrollWidth - el.clientWidth)
-      setTitleOverflow((prev) => (Math.abs(prev - next) <= 1 ? prev : next))
-    }
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [displayName])
+  const titleTextRef = useRef<HTMLSpanElement>(null)
+  // 标题溢出测量（与聊天配置栏当前值共用同一实现）：hover 时行尾时间槽会扩展
+  // 为动作按钮槽，标题可用宽度随之变化，ResizeObserver 会在这一拍补测，
+  // marquee 距离始终以当前宽度为准。
+  const titleOverflow = useOverflowDistance(titleRef, titleTextRef, displayName)
 
   const marqueeStyles =
     titleOverflow > 0
@@ -240,7 +231,9 @@ export const SessionRow = memo(function SessionRow({
         className={`session-name${isLive ? ' session-name-live' : ''}${titleOverflow > 0 ? ' is-overflowing' : ''}`}
         style={marqueeStyles}
       >
-        <span className="session-name-text">{displayName}</span>
+        <span ref={titleTextRef} className="session-name-text">
+          {displayName}
+        </span>
       </span>
       {/* Attention badge */}
       {attnReason && (
@@ -305,6 +298,9 @@ export const SessionRow = memo(function SessionRow({
                 acpSessionId: session.acp_session_id,
                 agentId: session.agent_id,
                 workspacePath: session.workspace_path,
+                // 删除确认是锚定气泡：把按钮此刻的视口矩形带出去
+                // （PopoverConfirm 据此贴边定位，不持有 DOM 引用）
+                anchor: popoverAnchor(e.currentTarget),
               })
             }}
           />

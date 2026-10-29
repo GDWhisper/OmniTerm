@@ -107,6 +107,23 @@ const MAX_FRAME_BYTES: usize = 64 * 1024;
 // eviction loop below could drain the window down to nothing on every fold.
 const _: () = assert!(MAX_FRAME_BYTES <= MAX_BLOCKS_BYTES);
 
+/// Pinned-frame budget: mid-turn SYSTEM notices (host-injected `session_info_update`
+/// frames carrying `_meta.omnitermSystem`) must not be evicted by the regular window,
+/// or the frontend loses the `noticeId` evidence it needs to fold the durable
+/// standalone `role='system'` rows back into the turn (they then pile up at the
+/// bottom of the message list — see plan 2026-10-26). Pinned frames keep their
+/// in-window position (correct ordering for free) but are skipped by regular
+/// eviction; their own budget is what keeps the window bounded (§P1: a "durable
+/// fallback" that grows without limit is the next incident, not a safety net).
+/// Overshooting the pin budget drops the *oldest* pinned notice and warns — the
+/// standalone row for it still exists (durable fallback) and the frontend's
+/// turn-attribution fallback recovers placement.
+const MAX_PINNED_NOTICES: usize = 64;
+const MAX_PINNED_BYTES: usize = 64 * 1024;
+// A pinned frame passes the same per-frame cap as any other, so one pinned frame can
+// never exceed the pinned byte budget on its own.
+const _: () = assert!(MAX_FRAME_BYTES <= MAX_PINNED_BYTES);
+
 /// Byte budget for the accumulated agent message text (the `text` column). The frame
 /// window above is bounded on two axes, but `text` used to be the one structure that
 /// grew without any cap at all — it was *deliberately* the unbounded fallback ("full
@@ -177,6 +194,21 @@ const OUTPUT_GAP_MS: u64 = 1_000;
 const MAX_ACTIVE_TURN_TOOLS: usize = 256;
 const MAX_TURN_TOOL_ID_UTF16: usize = 1024;
 
+/// One retained window entry: the pre-serialized frame plus its pinned flag
+/// (host SYSTEM notices are exempt from regular eviction — see [`MAX_PINNED_NOTICES`]).
+struct FrameEntry {
+    raw: Box<RawValue>,
+    pinned: bool,
+}
+
+/// 序列化委托给帧本体：窗口包裹里的元素就是原始 `SessionUpdate` JSON，pinned 标志
+/// 不落盘（它只是宿主侧的驱逐策略，`wrap_frames` 的消费方不需要知道）。
+impl Serialize for FrameEntry {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.raw.serialize(serializer)
+    }
+}
+
 #[derive(Default)]
 struct TurnState {
     /// True between `begin_turn` and `finalize_turn`. Gates folding so replay /
@@ -236,10 +268,17 @@ struct TurnState {
     /// pre-serialized [`RawValue`] so the window's byte size is known without
     /// re-formatting and flush only has to copy bytes. Bounded on both axes — frame
     /// count ([`MAX_FRAMES`]) and bytes ([`MAX_BLOCKS_BYTES`]) — front pops on overflow.
-    frames: VecDeque<Box<RawValue>>,
-    /// Running byte size of `frames` (sum of each frame's serialized length). Kept in
-    /// sync on every push/pop so eviction never has to walk the window.
+    /// Pinned entries (host SYSTEM notices) sit in the same deque at their true
+    /// position but are skipped by regular eviction; see [`MAX_PINNED_NOTICES`].
+    frames: VecDeque<FrameEntry>,
+    /// Running byte size of the **non-pinned** frames (the axis regular eviction
+    /// bounds). Kept in sync on every push/pop so eviction never has to walk the
+    /// window. Pinned bytes are tracked separately in `pinned_bytes`.
     frames_bytes: usize,
+    /// Pinned (host SYSTEM notice) frame count and bytes — independent budget
+    /// ([`MAX_PINNED_NOTICES`] / [`MAX_PINNED_BYTES`]), see that constant's docs.
+    pinned_count: usize,
+    pinned_bytes: usize,
     /// Accumulated agent message text (for the NOT NULL `text` column and as a
     /// plain-text fallback). Only `AgentMessageChunk` text is collected here.
     /// Bounded by [`MAX_TEXT_BYTES`] — see [`BoundedText`].
@@ -620,17 +659,44 @@ struct FlushSnapshot {
 ///
 /// `fold` 的 agent 帧与 [`TurnAccumulator::append_host_update`] 的宿主告知帧共用；
 /// 单帧超预算时不入窗口（`text` 已另行累积，被驱逐的只是结构化恢复窗口）。
-fn push_frame(st: &mut TurnState, frame: Box<serde_json::value::RawValue>) {
+///
+/// `pinned=true`（宿主 SYSTEM 告知）时豁免常规驱逐、按 [`MAX_PINNED_NOTICES`] /
+/// [`MAX_PINNED_BYTES`] 独立预算淘汰最旧 pinned；常规驱逐跳过 pinned 条目（最多
+/// 扫过 `pinned_count` 项即找到可删项，故扫描成本也被 pin 预算 bound 住）。全窗口
+/// 都是 pinned 时常规驱逐直接停——总量上界 = 常规预算 + pin 预算。
+fn push_frame(st: &mut TurnState, frame: Box<serde_json::value::RawValue>, pinned: bool) {
     let bytes = frame.get().len();
     if bytes > MAX_FRAME_BYTES {
         tracing::debug!(bytes, "dropping oversized session update frame from turn window");
         return;
     }
-    st.frames.push_back(frame);
-    st.frames_bytes += bytes;
-    while st.frames.len() > MAX_FRAMES || st.frames_bytes > MAX_BLOCKS_BYTES {
-        match st.frames.pop_front() {
-            Some(old) => st.frames_bytes -= old.get().len(),
+    if pinned {
+        while st.pinned_count >= MAX_PINNED_NOTICES || st.pinned_bytes + bytes > MAX_PINNED_BYTES {
+            match st.frames.iter().position(|e| e.pinned) {
+                Some(idx) => {
+                    let old = st.frames.remove(idx).expect("position 刚找到的下标必须存在");
+                    st.pinned_count -= 1;
+                    st.pinned_bytes -= old.raw.get().len();
+                    tracing::warn!(
+                        dropped = old.raw.get().len(),
+                        "pinned SYSTEM notice budget exceeded; oldest notice evicted (standalone row fallback covers it)"
+                    );
+                }
+                None => break,
+            }
+        }
+        st.pinned_count += 1;
+        st.pinned_bytes += bytes;
+    } else {
+        st.frames_bytes += bytes;
+    }
+    st.frames.push_back(FrameEntry { raw: frame, pinned });
+    while st.frames.len() - st.pinned_count > MAX_FRAMES || st.frames_bytes > MAX_BLOCKS_BYTES {
+        match st.frames.iter().position(|e| !e.pinned) {
+            Some(idx) => {
+                let old = st.frames.remove(idx).expect("position 刚找到的下标必须存在");
+                st.frames_bytes -= old.raw.get().len();
+            }
             None => break,
         }
     }
@@ -667,6 +733,8 @@ impl TurnAccumulator {
             st.last_timing = None;
             st.frames.clear();
             st.frames_bytes = 0;
+            st.pinned_count = 0;
+            st.pinned_bytes = 0;
             st.text.clear();
             st.dirty = false;
             st.reset_stats();
@@ -708,7 +776,7 @@ impl TurnAccumulator {
                 st.stats_on_tool(id, status, Instant::now());
             }
             match serde_json::value::to_raw_value(&notification.update) {
-                Ok(frame) => push_frame(&mut st, frame),
+                Ok(frame) => push_frame(&mut st, frame, false),
                 Err(e) => {
                     tracing::warn!("failed to serialize session update for persistence: {}", e)
                 }
@@ -741,7 +809,7 @@ impl TurnAccumulator {
             }
             let row_id = st.row_id.clone()?;
             match serde_json::value::to_raw_value(update) {
-                Ok(frame) => push_frame(&mut st, frame),
+                Ok(frame) => push_frame(&mut st, frame, true),
                 Err(e) => {
                     tracing::warn!("failed to serialize host update for persistence: {}", e);
                     return None;
@@ -956,11 +1024,11 @@ impl TurnAccumulator {
 /// Wrap the retained frames into the `blocks` column payload
 /// (`{"v":1,"frames":[...]}`, see module docs). Frames are already serialized
 /// ([`RawValue`]) so this only concatenates bytes — no re-formatting per flush.
-fn wrap_frames(frames: &VecDeque<Box<RawValue>>) -> String {
+fn wrap_frames(frames: &VecDeque<FrameEntry>) -> String {
     #[derive(Serialize)]
     struct Wrapper<'a> {
         v: u64,
-        frames: &'a VecDeque<Box<RawValue>>,
+        frames: &'a VecDeque<FrameEntry>,
     }
     match serde_json::to_string(&Wrapper { v: RAW_FRAMES_VERSION, frames }) {
         Ok(s) => s,
@@ -2352,6 +2420,94 @@ mod tests {
         acc.begin_turn();
         acc.finalize_turn();
         assert!(acc.append_host_update(&serde_json::json!({"x": 1})).is_none());
+    }
+
+    /// 宿主告知帧构造器：`pad` 控制 detail.content 长度以测字节维度。
+    fn notice_frame(id: &str, pad: usize) -> serde_json::Value {
+        serde_json::json!({
+            "sessionUpdate": "session_info_update",
+            "_meta": { "omnitermSystem": { "id": id, "label": "system.permTimeout.auto",
+                "detail": { "content": "x".repeat(pad) } } }
+        })
+    }
+
+    /// pinned 告知豁免常规驱逐：agent 帧把常规窗口挤爆后告知仍在（noticeId 去重的
+    /// 依据不丢），非 pinned 部分仍守 [`MAX_FRAMES`] / [`MAX_BLOCKS_BYTES`]。
+    #[test]
+    fn pinned_notices_survive_regular_eviction() {
+        let acc = TurnAccumulator::new();
+        acc.begin_turn();
+        let sid = SessionId::new("s1");
+
+        acc.append_host_update(&notice_frame("notice-early", 0)).expect("宿主帧");
+        for i in 0..(MAX_FRAMES * 3 / 2) {
+            acc.fold(&text_chunk(&sid, format!("chunk-{i} ")));
+        }
+        acc.append_host_update(&notice_frame("notice-late", 0)).expect("宿主帧");
+
+        let (total, non_pinned_bytes) = retained_frames(&acc);
+        assert!(
+            total <= MAX_FRAMES + MAX_PINNED_NOTICES,
+            "总量 = 常规预算 + pin 预算，得到 {total}"
+        );
+        assert!(non_pinned_bytes <= MAX_BLOCKS_BYTES, "非 pinned 字节不得超常规预算");
+
+        let frames = parse_frames(&acc.turn_snapshot().blocks);
+        let has = |id: &str| frames.iter().any(|f| f["_meta"]["omnitermSystem"]["id"] == id);
+        assert!(has("notice-early"), "常规驱逐不得挤掉 pinned 告知");
+        assert!(has("notice-late"), "后到的 pinned 告知不得被挤掉");
+    }
+
+    /// pin 预算按条数淘汰**最旧** pinned（回退独立行兜底），总量不随告知次数无界增长
+    /// （performance-and-safety.md §P1：pin 区是累积结构，必须显式上限 + 超限策略）。
+    #[test]
+    fn pinned_budget_evicts_oldest_pinned() {
+        let acc = TurnAccumulator::new();
+        acc.begin_turn();
+
+        let n = MAX_PINNED_NOTICES + 8;
+        for i in 0..n {
+            acc.append_host_update(&notice_frame(&format!("notice-{i:04}"), 0)).expect("宿主帧");
+        }
+
+        let (total, _) = retained_frames(&acc);
+        assert_eq!(total, MAX_PINNED_NOTICES, "pin 条数上限必须封顶，得到 {total}");
+        let frames = parse_frames(&acc.turn_snapshot().blocks);
+        let has = |id: &str| frames.iter().any(|f| f["_meta"]["omnitermSystem"]["id"] == id);
+        assert!(!has("notice-0000"), "最旧 pinned 应先被淘汰");
+        assert!(has(&format!("notice-{:04}", n - 1)), "最新 pinned 必须保留");
+    }
+
+    /// pin 预算按字节同样封顶：单条告知体积由请求内容决定（options/预览），只限条数
+    /// 等于没限（§P1 上限维度必须匹配增长维度）。
+    #[test]
+    fn pinned_budget_evicts_on_bytes_too() {
+        let acc = TurnAccumulator::new();
+        acc.begin_turn();
+
+        // 每条 ≈ 16KB（< MAX_FRAME_BYTES），4 条后必超 64KB 的 pin 字节预算。
+        let pad = 16 * 1024;
+        let n = 6;
+        for i in 0..n {
+            acc.append_host_update(&notice_frame(&format!("big-{i:02}"), pad)).expect("宿主帧");
+        }
+
+        let (_, _) = retained_frames(&acc);
+        let st = acc.inner.lock().expect("lock");
+        assert!(
+            st.pinned_bytes <= MAX_PINNED_BYTES,
+            "pinned 字节不得超预算，得到 {}",
+            st.pinned_bytes
+        );
+        assert!(st.pinned_count < n, "字节超限时应淘汰最旧 pinned，得到 {}", st.pinned_count);
+        drop(st);
+        let frames = parse_frames(&acc.turn_snapshot().blocks);
+        assert!(
+            frames
+                .iter()
+                .any(|f| f["_meta"]["omnitermSystem"]["id"] == format!("big-{:02}", n - 1)),
+            "最新 pinned 必须保留"
+        );
     }
 
     /// UTF-16 计数口径：emoji（代理对）按 2 计——与旧前端 `String.length` 同口径，

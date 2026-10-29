@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useChatStore, messagesToSyncPayload, turnToSyncPayload, storedRawRowToSyncPayload, buildReplayMessages, alignReplaySyncPayload, type PlanEntry, type ConfigOption, type SlashCommand, type SessionUpdateAction, type PendingPermission, type ContentBlock, type SyncMessagePayload, type SystemBlockDetail, type ChatMessage } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
@@ -6,7 +7,8 @@ import type { ImageAttachment } from '../utils/imageAttachment'
 import type { FileAttachment } from '../utils/fileAttachment'
 import { clearLiveTurnStats, setLiveTurnStats } from '../utils/turnStats'
 import { postSyncPayload } from '../utils/syncMessages'
-import { LiveBuffer, LIVE_BUFFER_FLUSH_FALLBACK_MS } from '../utils/liveBuffer'
+import { LiveBuffer, LIVE_BUFFER_FLUSH_FALLBACK_MS, LIVE_BUFFER_MAX_ACTIONS, LIVE_BUFFER_MAX_BYTES } from '../utils/liveBuffer'
+import { utf8Bytes } from '../utils/textBytes'
 import { permDecisionNoticeExempt } from '../utils/permTimeout'
 import { clearChatScrollMemory } from '../utils/chatScrollMemory'
 import { isFrameWrapperParsed } from '../utils/storedMessages'
@@ -23,6 +25,17 @@ export const HEARTBEAT_MAX_MISSED = 3
  *  重放本身幂等：前端只在 `replay_end` 原子提交，失败时 store 保持原样；
  *  每次重连成功重发一次 `load_session` 即可续上，不必让用户反复点恢复。 */
 export const MAX_MANUAL_RESTORE_RETRIES = 3
+
+/** preHydrateBuffer（hydrate 门控的帧缓冲）上限（2026-10-10 计划 ⑨a）：条数与
+ *  UTF-8 字节两条同时守（§P1：帧大小由 agent 决定，只限条数等于没限）。取值与
+ *  liveBuffer 同源——两者界的是同一类窗口（「WS 照投、消费方停摆」：liveBuffer
+ *  是 rAF 停摆，这里是 GET /messages 在飞），只是停摆原因不同，上限无须分道。
+ *  超限策略 = 丢最旧（新帧携带最新 seq 状态）+ 置 needsCatchUp 显式找回：被丢
+ *  帧的内容后端累积器已落库，聚焦补拉的幂等合并会从 DB 拿回；**不能**像
+ *  liveBuffer 那样「越界即提前消费」——hydrate 未落定前应用帧会让 hydrate 因
+ *  messages 非空而 bail，丢的是整段历史。 */
+const PRE_HYDRATE_MAX_FRAMES = LIVE_BUFFER_MAX_ACTIONS
+const PRE_HYDRATE_MAX_BYTES = LIVE_BUFFER_MAX_BYTES
 
 /** 已解决审批的 tombstone 上限（见 `resolvedPermIds`）：只需覆盖「resolved 帧领先
  *  其请求帧」的在途窗口——两帧走同一 mpsc + 同一 WS 的有序链路，倒置窗口实测
@@ -702,6 +715,7 @@ export function decodeStoredBlocks(raw: string, fullText?: string): ContentBlock
 // --- Hook ---
 
 export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
+  const { t } = useTranslation()
   const [connectionState, setConnectionState] = useState<AcpConnectionState>('disconnected')
   const wsRef = useRef<WebSocket | null>(null)
   const sessionIdRef = useRef<string | null>(null)
@@ -751,8 +765,11 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // hydrate 门控：ChatView 的 GET /messages 落定前，把会影响消息列表的帧（turn_snapshot
   // /session_update/turn_state/prompt_*）攒在此缓冲，避免抢在 hydrate 之前建消息导致
   // hydrate 因 messages 非空而 bail（丢历史）。落定后按序回放。重连（无 remount）时
-  // hydrated 已 true，帧即时派发不入缓冲。
-  const preHydrateBuffer = useRef<ServerFrame[]>([])
+  // hydrated 已 true，帧即时派发不入缓冲。**有界**（PRE_HYDRATE_MAX_FRAMES/BYTES，
+  // 2026-10-10 计划 ⑨a）：窗口 = 一次 GET 在飞，但 agent 高频输出 × 大页面 hydrate 慢
+  // 时帧数无自然上限；越界丢最旧并置 needsCatchUp（内容从 DB 找回，见常量注释）。
+  const preHydrateBuffer = useRef<{ frame: ServerFrame; bytes: number }[]>([])
+  const preHydrateBytesRef = useRef(0)
   const hydratedRef = useRef(false)
   // 本次连接见过的审批 id（permission_request 帧累计）：permissions_synced 到达时
   // 用它对账——队列里不在集合内的 banner 是错过 resolved 广播的陈旧项，清除。
@@ -770,15 +787,18 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // ChatView hydrate 落定信号（每会话），用于放行 preHydrateBuffer。
   const hydrated = useChatStore((s) => (sessionId ? s.states[sessionId]?.hydrated : false) ?? false)
 
-  const flushLiveBuffer = useCallback(() => {
+  const flushLiveBuffer = useCallback((sid?: string) => {
     liveRaf.current = null
-    const sid = sessionIdRef.current
-    if (!sid) return
+    // 显式传 sid 时以它为准（2026-10-10 计划 ⑨b）：ws 生命周期 effect 的 cleanup
+    // 里 sessionIdRef.current 已被 render 赋成新会话——此刻缓冲里积压的是**旧**
+    // 会话的动作，落到旧会话的 store 才正确（ref 会把它们错投进新会话）。
+    const target = sid ?? sessionIdRef.current
+    if (!target) return
     // 空缓冲直接返回：兜底定时器每秒都会打到这里（隐藏页 rAF 停摆期间），
     // 不该为此付出一次 store 读取与空数组分配。
     if (liveBuffer.current.isEmpty()) return
     const batch = liveBuffer.current.take()
-    useChatStore.getState().applyReplayBatch(sid, batch)
+    useChatStore.getState().applyReplayBatch(target, batch)
   }, [])
 
   /** 入队一条实时动作。越界（条数/字节）时立即提交，不等下一个 rAF——
@@ -965,7 +985,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             case 'pushSystem':
               pushLiveAction(action)
               if (liveRaf.current === null) {
-                liveRaf.current = requestAnimationFrame(flushLiveBuffer)
+                // 包一层：flushLiveBuffer 带 sid 参数（⑨b），不再兼容
+                // FrameRequestCallback 的 (time: number) 签名。
+                liveRaf.current = requestAnimationFrame(() => flushLiveBuffer())
               }
               break
             case 'drop':
@@ -1368,6 +1390,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       wsRef.current = ws
       inProgressSeq.current = null
       preHydrateBuffer.current = []
+      preHydrateBytesRef.current = 0
       permIdsThisConnect.current.clear()
       resolvedPermIds.current.clear()
 
@@ -1412,7 +1435,25 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         // （capabilities/process_alive/terminal_activity/permission_request/error）
         // 不触碰 hydrate 守卫，即时派发。
         if (!hydratedRef.current && HYDRATE_GATED_FRAMES.has(frame.type)) {
-          preHydrateBuffer.current.push(frame)
+          const bytes = utf8Bytes(ev.data)
+          preHydrateBuffer.current.push({ frame, bytes })
+          preHydrateBytesRef.current += bytes
+          // 越界丢最旧 + 置聚焦补拉标记：被丢帧的内容后端已落库，补拉的幂等合并
+          // 会从 DB 找回（宁走一次显式找回路径，不无界累积、也不静默丢弃）。
+          let dropped = false
+          while (
+            preHydrateBuffer.current.length > PRE_HYDRATE_MAX_FRAMES ||
+            preHydrateBytesRef.current > PRE_HYDRATE_MAX_BYTES
+          ) {
+            const head = preHydrateBuffer.current.shift()
+            if (!head) break
+            preHydrateBytesRef.current -= head.bytes
+            dropped = true
+          }
+          if (dropped) {
+            const sid = sessionIdRef.current
+            if (sid) useChatStore.getState().setNeedsCatchUp(sid, true)
+          }
           return
         }
         dispatchFrame(frame)
@@ -1546,7 +1587,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         cancelAnimationFrame(liveRaf.current)
         liveRaf.current = null
       }
-      flushLiveBuffer()
+      // 显式传本 effect 的 sessionId（而非 ref）：切会话触发的 cleanup 运行时
+      // ref 已指向新会话，缓冲里的积压动作属于旧会话（⑨b，防跨会话错投）。
+      flushLiveBuffer(sessionId)
       frameHandlerRef.current = null
       const ws = wsRef.current
       if (ws && ws.readyState === WebSocket.OPEN) ws.close()
@@ -1578,8 +1621,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     const buffered = preHydrateBuffer.current
     if (buffered.length === 0) return
     preHydrateBuffer.current = []
+    preHydrateBytesRef.current = 0
     const handler = frameHandlerRef.current
-    if (handler) for (const f of buffered) handler(f)
+    if (handler) for (const { frame } of buffered) handler(frame)
   }, [hydrated, postSync])
 
   // rAF 停摆兜底：隐藏页 / 最小化窗口 / 后台标签都不派发 rAF（动画帧随渲染一起
@@ -1591,7 +1635,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // throttling）、iOS 直接挂起，那时真正的硬上限是 LiveBuffer 的「越界即 flush」
   // （utils/liveBuffer.ts）——缓冲不可能随离开时长无限增长。
   useEffect(() => {
-    const id = window.setInterval(flushLiveBuffer, LIVE_BUFFER_FLUSH_FALLBACK_MS)
+    // 包一层：flushLiveBuffer 带 sid 参数（⑨b），直接传会给 setInterval 回调注入
+    // delay number 当 sid。
+    const id = window.setInterval(() => flushLiveBuffer(), LIVE_BUFFER_FLUSH_FALLBACK_MS)
     return () => window.clearInterval(id)
   }, [flushLiveBuffer])
 
@@ -1602,8 +1648,23 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     const hasImages = !!images && images.length > 0
     const hasFiles = !!files && files.length > 0
     // 纯附件消息（无文字）合法：粘贴截图 / 只发一个文件直接发送。
-    if (!ws || ws.readyState !== WebSocket.OPEN || !sid || (!trimmed && !hasImages && !hasFiles))
+    // 空输入是正常的用户输入守卫，静默返回（2026-10-10 计划 ①：不是失败）。
+    // !sid 同理静默：无会话上下文时无处展示错误，也与「连接失败」不同类。
+    if ((!trimmed && !hasImages && !hasFiles) || !sid) return
+    // socket 不可用 = 失败，必须留下可见痕迹（2026-10-10 计划 ①）：旧行为静默
+    // return，用户侧「能打字、回车毫无反应」，与假死完全同形。落 store error
+    // （错误条渲染路径），不插用户气泡（历史里不该出现从未发出的消息）、不 toast
+    // （与既有断连留痕重复打扰）。文案分档读 connectionState：connecting 态提示
+    // 重连中而非「未发送」，避免误报失败。
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      useChatStore.getState().setError(
+        sid,
+        connectionState === 'connecting'
+          ? t('chat.sendFail.reconnecting')
+          : t('chat.sendFail.disconnected'),
+      )
       return
+    }
     // 恢复/重放尚未结束：此时发送的 prompt 会与 load_session 竞态，后端可能把它
     // 交给未就绪的 agent 并落出空 assistant 行。输入框已禁用，这里兜底直连/竞态。
     if (isReplaying.current) return
@@ -1650,7 +1711,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       // send 失败（底层缓冲满 / 连接已坏）：不乐观置 sending，直接报错
       s.markError(sid, 'Failed to send message — connection unavailable')
     }
-  }, [attention])
+  }, [attention, connectionState, t])
 
   const cancel = useCallback(() => {
     const ws = wsRef.current

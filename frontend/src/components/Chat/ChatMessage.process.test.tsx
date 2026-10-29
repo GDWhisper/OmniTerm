@@ -539,3 +539,37 @@ describe('ProcessBlocks mid-turn SYSTEM 告知归组', () => {
     expect(container.querySelector('.chat-system-panel')).toBeTruthy()
   })
 })
+
+// 复制入口归属（2026-10-28 用户要求）：气泡右上角的块级角标与消息动作栏的
+// 「复制 / 复制为 Markdown」重复，且会压住代码块自己的复制按钮 → text 气泡不再
+// 渲染角标；思考块 / 工具卡的角标语义不同（复制各自原文），保留。
+describe('块级复制角标归属', () => {
+  it('text 气泡不带块级复制角标（整条消息走动作栏复制）', () => {
+    render({
+      id: 'm-text-only',
+      role: 'assistant',
+      text: '纯文字结论',
+      blocks: [{ type: 'text', text: '纯文字结论' }],
+      createdAt: 0,
+    })
+    expect(textBubble()).toBeTruthy()
+    expect(textBubble()!.querySelector('.chat-block-copy-btn')).toBeNull()
+  })
+
+  it('思考块与工具卡仍各自带块级复制角标', () => {
+    render({
+      id: 'm-blocks',
+      role: 'assistant',
+      text: '结论',
+      blocks: [
+        { type: 'thought', text: '思考原文' },
+        { type: 'tool_call', toolCallId: 't1', title: '改文件', status: 'completed', content: '- old\n+ new' },
+        { type: 'text', text: '结论' },
+      ],
+      createdAt: 0,
+    })
+    // 容器默认收起，明细块需展开后才挂载
+    click(processHeader())
+    expect(container.querySelectorAll('.chat-block-copy-btn')).toHaveLength(2)
+  })
+})

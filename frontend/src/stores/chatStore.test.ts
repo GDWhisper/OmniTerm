@@ -6,6 +6,9 @@ import {
   turnToSyncPayload,
   storedRawRowToSyncPayload,
   buildReplayMessages,
+  absorbSystemNotices,
+  relocateOrphanSystemMessages,
+  dropInlinedSystemMessages,
   MAX_PENDING_PERMISSIONS,
   type ChatMessage,
   type ConfigOption,
@@ -644,6 +647,110 @@ describe('turnToSyncPayload', () => {
     expect(turnToSyncPayload(msgs, 'row-1')[0].blocks).toBe(
       JSON.stringify([{ type: 'text', text: 'a' }]),
     )
+  })
+})
+
+describe('relocateOrphanSystemMessages / absorbSystemNotices（2026-10-26 归块）', () => {
+  const mk = (overrides: Partial<ChatMessage> & { role: ChatMessage['role'] }): ChatMessage => ({
+    id: overrides.id ?? `m-${Math.random()}`,
+    dbId: overrides.dbId,
+    turnRowId: overrides.turnRowId,
+    text: overrides.text ?? '',
+    blocks: overrides.blocks ?? [{ type: 'text', text: overrides.text ?? '' }],
+    createdAt: overrides.createdAt ?? 0,
+    finishedAt: overrides.finishedAt,
+    streaming: overrides.streaming,
+    role: overrides.role,
+  })
+  const turn = (extra: Partial<ChatMessage> = {}): ChatMessage =>
+    mk({
+      role: 'assistant',
+      dbId: 'row-1',
+      createdAt: 1000,
+      finishedAt: new Date(5000).toISOString(),
+      blocks: [
+        { type: 'tool_call', toolCallId: 't1', title: 'run', status: 'completed' },
+        { type: 'text', text: '最终输出' },
+      ],
+      ...extra,
+    })
+  const notice = (extra: Partial<ChatMessage> = {}): ChatMessage =>
+    mk({
+      role: 'system',
+      createdAt: 2500,
+      blocks: [{ type: 'system', label: 'system.permTimeout.auto', noticeId: 'n1' }],
+      ...extra,
+    })
+
+  it('① turnRowId 归块：独立行进 turn 过程区（最终 text 之前）并从列表移除', () => {
+    const later = notice({
+      turnRowId: 'row-1',
+      createdAt: 2600,
+      blocks: [{ type: 'system', label: 'system.permTimeout.auto', noticeId: 'n2' }],
+    })
+    const out = relocateOrphanSystemMessages([turn(), notice({ turnRowId: 'row-1' }), later])
+    expect(out).toHaveLength(1)
+    expect(out[0].blocks).toEqual([
+      { type: 'tool_call', toolCallId: 't1', title: 'run', status: 'completed' },
+      // 两条告知按 createdAt 升序、整批插在最终 text 之前
+      { type: 'system', label: 'system.permTimeout.auto', noticeId: 'n1' },
+      { type: 'system', label: 'system.permTimeout.auto', noticeId: 'n2' },
+      { type: 'text', text: '最终输出' },
+    ])
+  })
+
+  it('② 历史行启发式：无 turnRowId 的 permTimeout 落在 turn 时间区间内归块', () => {
+    const out = relocateOrphanSystemMessages([turn(), notice({ turnRowId: null })])
+    expect(out).toHaveLength(1)
+    expect(out[0].blocks[1]).toEqual({
+      type: 'system',
+      label: 'system.permTimeout.auto',
+      noticeId: 'n1',
+    })
+  })
+
+  it('③ system.turnFailed.* 不归块（终态告知必须留在消息流可见位）', () => {
+    const failed = notice({
+      turnRowId: 'row-1',
+      blocks: [{ type: 'system', label: 'system.turnFailed.refusal' }],
+    })
+    const out = relocateOrphanSystemMessages([turn(), failed])
+    expect(out).toHaveLength(2)
+    expect(out[1]).toBe(failed)
+  })
+
+  it('④ finishedAt 缺失的 turn 不做启发式归块（保守保留独立行）', () => {
+    const out = relocateOrphanSystemMessages([turn({ finishedAt: null }), notice({ turnRowId: null })])
+    expect(out).toHaveLength(2)
+  })
+
+  it('⑤ 同 noticeId 已内联：只移除独立行、不重复插块（幂等）', () => {
+    const target = turn({
+      blocks: [
+        { type: 'system', label: 'system.permTimeout.auto', noticeId: 'n1' },
+        { type: 'text', text: '最终输出' },
+      ],
+    })
+    const out = relocateOrphanSystemMessages([target, notice({ turnRowId: 'row-1' })])
+    expect(out).toHaveLength(1)
+    expect(out[0].blocks).toEqual(target.blocks)
+  })
+
+  it('⑥ absorbSystemNotices = 归块 + noticeId 去重一步到位', () => {
+    // 内联帧还在（去重可命中）但独立行也有归属：两条路都指向「只出现一次」。
+    const target = turn({
+      blocks: [
+        { type: 'system', label: 'system.permTimeout.auto', noticeId: 'n1' },
+        { type: 'text', text: '最终输出' },
+      ],
+    })
+    const out = absorbSystemNotices([target, notice({ turnRowId: 'row-1' })])
+    expect(out).toHaveLength(1)
+    expect(out[0].blocks).toEqual(target.blocks)
+    // 纯去重路径（无归属、无启发式命中）行为不变
+    const old = [turn(), notice({ turnRowId: null, createdAt: 99999 })]
+    expect(absorbSystemNotices(old)).toHaveLength(2)
+    expect(dropInlinedSystemMessages(old)).toHaveLength(2)
   })
 })
 

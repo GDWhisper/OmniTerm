@@ -7,7 +7,7 @@ import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
 import { api } from '../../api/client'
 import { BookIcon } from '../Icons/BookIcon'
-import { IconEye, IconPlus, IconSettings } from '../FileManager/icons'
+import { IconEye, IconPlus, IconSettings, IconExpandAll } from '../FileManager/icons'
 import { KeyboardIcon } from '../Icons/KeyboardIcon'
 import { GitHubIcon } from '../Icons/GitHubIcon'
 import type { DuplicateGroup, Project, Workspace } from '../../api/client'
@@ -1123,7 +1123,7 @@ export function Sidebar() {
             }
             style={expandAllSessions ? { color: 'var(--accent)' } : undefined}
           >
-            {expandAllSessions ? '⤢' : <IconEye />}
+            {expandAllSessions ? <IconExpandAll /> : <IconEye />}
           </button>
           <button
             onClick={() => setCreateProjOpen(true)}
@@ -1210,7 +1210,7 @@ export function Sidebar() {
           sessions={archivedSessions}
           onOpen={(s) => activateSession(s.id)}
           onUnarchive={(s) => void unarchiveSessionNow(s.id)}
-          onDelete={(s) =>
+          onDelete={(s, anchor) =>
             setConfirmDelete({
               type: 'session',
               id: s.id,
@@ -1219,6 +1219,7 @@ export function Sidebar() {
               acpSessionId: s.acp_session_id,
               agentId: s.agent_id,
               workspacePath: s.workspace_path,
+              anchor,
             })
           }
         />

@@ -68,6 +68,12 @@ const CHAT_DIM_IDLE_MS = 180
  *  贴底误判成「用户上翻」）。与 `useStickScroll` 的内部阈值同口径。 */
 const CHAT_STICK_THRESHOLD_PX = 24
 
+/** 标题栏模式徽章的宽度上限。模式 id 由 agent 自定（如 `bypassPermissions`），
+ *  它是标题栏里唯一不可断词的长串，不设上限会先吃光空间、把右侧用量 / LIVE
+ *  徽章挤到换行（360px 移动端实测）。超宽截断为省略号，完整值走 title。 */
+const CHAT_MODE_BADGE_MAX_W_MOBILE = 64
+const CHAT_MODE_BADGE_MAX_W_DESKTOP = 160
+
 /**
  * 移动端「离开 ≥ 该时长后回来」即补拉的阈值（E1 兜底）。
  *
@@ -331,7 +337,9 @@ export function ChatView() {
     const sid = activeSessionId
     if (!sid || catchUpInFlightRef.current) return
     const st = useChatStore.getState().states[sid]
-    if (!st?.hydrated || st.replaying || !st.needsCatchUp) return
+    // loadingHistory = 上拉分页在飞：补拉与其互斥（两请求都动消息列表 + 滚动锚点，
+    // 并发落定顺序不可控）。补拉失败保留标记，下次事件重试，无损失。
+    if (!st?.hydrated || st.replaying || !st.needsCatchUp || st.loadingHistory) return
     catchUpInFlightRef.current = true
     try {
       const r = await fetch(`/api/v1/sessions/${encodeURIComponent(sid)}/messages`)
@@ -384,9 +392,40 @@ export function ChatView() {
     }
   }, [activeSessionId])
 
-  useEffect(() => {
-    void catchUpIfNeeded()
+  // 补拉错峰（2026-10-10 计划 D2）：可见性/聚焦恢复的同一帧里挤着 flushLiveBuffer
+  // （隐藏期积压 + 兜底定时器残留）与本组件的重渲染，GET /messages 的发起与合并
+  // （mergeLatestMessages 尾部扫描 + scanTodoBoard 全列表扫描）挪到独立的短延迟任务，
+  // 让用户的输入事件排在这些工作之前。flush 保持同步不动（内容正确性的一部分，
+  // 已有上限）。requestIdleCallback 在 Safari 不存在、移动端「空闲」可能很久不来
+  // （用户正盯着屏幕），降级 setTimeout(0) 而非死等 idle。已排定未执行的任务去重
+  // （visibilitychange + focus + pageshow 常连续触发）；卸载时取消。
+  const CATCH_UP_IDLE_TIMEOUT_MS = 200
+  const cancelPendingCatchUpRef = useRef<(() => void) | null>(null)
+  const scheduleCatchUp = useCallback(() => {
+    if (cancelPendingCatchUpRef.current !== null) return
+    const run = () => {
+      cancelPendingCatchUpRef.current = null
+      void catchUpIfNeeded()
+    }
+    if (typeof window.requestIdleCallback === 'function') {
+      const id = window.requestIdleCallback(run, { timeout: CATCH_UP_IDLE_TIMEOUT_MS })
+      cancelPendingCatchUpRef.current = () => window.cancelIdleCallback(id)
+    } else {
+      const id = window.setTimeout(run, 0)
+      cancelPendingCatchUpRef.current = () => window.clearTimeout(id)
+    }
   }, [catchUpIfNeeded])
+  useEffect(
+    () => () => {
+      cancelPendingCatchUpRef.current?.()
+      cancelPendingCatchUpRef.current = null
+    },
+    [],
+  )
+
+  useEffect(() => {
+    scheduleCatchUp()
+  }, [scheduleCatchUp])
 
   useEffect(() => {
     const onVisible = () => {
@@ -396,18 +435,18 @@ export function ChatView() {
         return
       }
       forceResumeCatchUp()
-      void catchUpIfNeeded()
+      scheduleCatchUp()
     }
     // 窗口聚焦（页面本就可见、焦点从别窗回来）没有 hidden→visible 迁移，
     // hiddenAtRef 为 null ⇒ E1 不触发，只走既有标记路径。
     const onFocus = () => {
-      void catchUpIfNeeded()
+      scheduleCatchUp()
     }
     // bfcache / 标签恢复（iOS 切 app 回来的常见形态）：冻结期内 socket 被对端
     // 重置且页面不补派 onclose；persisted 恢复同样按 E1 兜底，不等 visibility。
     const onPageShow = (e: Event) => {
       if ((e as PageTransitionEvent).persisted) forceResumeCatchUp()
-      void catchUpIfNeeded()
+      scheduleCatchUp()
     }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onFocus)
@@ -433,15 +472,18 @@ export function ChatView() {
     return useChatStore.subscribe((s, p) => {
       const now = s.states[sid]?.needsCatchUp === true
       const was = p.states[sid]?.needsCatchUp === true
-      if (now && !was && !document.hidden) void catchUpIfNeeded()
+      if (now && !was && !document.hidden) scheduleCatchUp()
     })
-  }, [activeSessionId, catchUpIfNeeded])
+  }, [activeSessionId, scheduleCatchUp])
 
   // 上拉加载更早的一页历史。首屏只取最近一页（后端按条数 + 字节双预算切页），
   // 用户滚到顶部才继续向前取——绝大多数切换只关心最新那批记录。
   const loadOlderHistory = useCallback(async () => {
     const sid = activeSessionId
     if (!sid) return
+    // 补拉在飞时上拉与其互斥（双向：catchUpIfNeeded 读 loadingHistory，这里读
+    // catchUpInFlightRef）——两个请求都动消息列表与滚动锚点，并发落定顺序不可控。
+    if (catchUpInFlightRef.current) return
     const s = useChatStore.getState()
     const st = s.states[sid]
     const cursor = st?.historyCursor
@@ -1036,14 +1078,19 @@ export function ChatView() {
         <span>chat</span>
         {chatState.mode && (
           <span
+            title={chatState.mode}
             style={{
-              marginLeft: 8,
-              padding: '1px 8px',
+              marginLeft: isMobile ? 4 : 8,
+              padding: isMobile ? '1px 5px' : '1px 8px',
               fontSize: 10,
               background: 'var(--accent-14)',
               color: 'var(--accent)',
               borderRadius: 0,
               letterSpacing: '0.08em',
+              maxWidth: isMobile ? CHAT_MODE_BADGE_MAX_W_MOBILE : CHAT_MODE_BADGE_MAX_W_DESKTOP,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
             }}
           >
             {chatState.mode.toUpperCase()}

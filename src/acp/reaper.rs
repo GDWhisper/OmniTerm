@@ -297,11 +297,16 @@ fn detail_json(
 ///
 /// `noticeId` 与内联帧同值：hydrate/补拉时若 assistant 行里已能解出同 id 的
 /// system 块，前端会过滤掉这条独立行，避免同一告知出现两次。
+///
+/// `turn_row_id`：告知发生时所在 turn 的 assistant 行 id（计划 2026-10-26 D2）。
+/// 帧被逐出、`noticeId` 去重失效时前端据此把本行归块进该 turn 的过程容器，不再
+/// 按 `created_at` 沉底；无活跃 turn 时为 `None`（该告知本就该独立展示）。
 async fn persist_system_row(
     db: &SqlitePool,
     session_id: &str,
     notice: &PermissionTimeoutNotice,
     notice_id: &str,
+    turn_row_id: Option<&str>,
 ) {
     let blocks = serde_json::json!([
         {
@@ -312,9 +317,15 @@ async fn persist_system_row(
         }
     ])
     .to_string();
-    if let Err(e) =
-        chat_persistence::insert_message(db, session_id, "system", &notice.text, Some(&blocks))
-            .await
+    if let Err(e) = chat_persistence::insert_message(
+        db,
+        session_id,
+        "system",
+        &notice.text,
+        Some(&blocks),
+        turn_row_id,
+    )
+    .await
     {
         tracing::warn!(
             session_id = %session_id,
@@ -330,6 +341,10 @@ async fn persist_system_row(
 /// 当前 assistant turn 的有序帧窗口并广播——agent 的后续输出会排在它之后，hydrate
 /// 时也不会因 assistant 行的 `created_at` 早于 system 行而整批置底。无活跃 turn
 /// 时只落独立行并广播（行为与旧版一致）。
+///
+/// 顺序：**先内联后落库**——`notify_inline_system_notice` 会为惰创建的 turn 行开
+/// `row_id`（告知先于首个可见帧到达的场景），先落库会拿到 `None` 归属（2026-10-26
+/// 计划 D2 实施时发现的顺序依赖）。
 async fn persist_and_broadcast(
     db: &SqlitePool,
     session_id: &str,
@@ -337,15 +352,16 @@ async fn persist_and_broadcast(
     notice: &PermissionTimeoutNotice,
 ) {
     let notice_id = Uuid::new_v4().to_string();
-    persist_system_row(db, session_id, notice, &notice_id).await;
     let system_notice = SystemNotice {
         label: notice.label.to_string(),
         detail: Some(notice.detail.clone()),
-        notice_id: Some(notice_id),
+        notice_id: Some(notice_id.clone()),
     };
     if !client.notify_inline_system_notice(&system_notice) {
         client.notify_system_message(system_notice);
     }
+    let turn_row_id = client.current_turn_row_id();
+    persist_system_row(db, session_id, notice, &notice_id, turn_row_id.as_deref()).await;
 }
 
 /// 自动推进：代替用户应答全部未决审批（不 cancel、不杀会话，agent 继续执行），
@@ -399,7 +415,10 @@ async fn auto_advance_permissions(
         resolved += 1;
         // 独立行始终落：帧窗口是有界的，early 告知可能被逐出；hydrate 时若
         // assistant 行里还能解出同 noticeId 的内联块，前端会过滤这条兜底行。
-        persist_system_row(db, session_id, &notice, &notice_id).await;
+        // 归属取自当前 turn（`resolve_permission_with_notice` 的内联帧刚惰创建了
+        // row_id）——帧被逐出时前端据此归块进过程容器（2026-10-26 计划 D2）。
+        let turn_row_id = client.current_turn_row_id();
+        persist_system_row(db, session_id, &notice, &notice_id, turn_row_id.as_deref()).await;
         if !notice_emitted {
             // 无活跃 turn（理论上 pending 审批通常伴随 active turn）：没有内联帧，
             // 只广播独立 system 消息。

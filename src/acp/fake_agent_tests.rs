@@ -752,16 +752,17 @@ async fn always_auto_mode_answers_permission_on_arrival_not_next_tick() {
     // 告知双轨落盘：独立 system 行（帧窗口驱逐后的兜底）+ assistant 行的内联帧
     // （hydrate 时按同一 noticeId 过滤独立行，保证正确的 turn 内顺序）。
     let notice_id = omni["id"].as_str().expect("inline SYSTEM notice 必须带去重 id").to_string();
-    let rows: Vec<(String, Option<String>)> = tokio::time::timeout(UNWIND_TIMEOUT, async {
+    let rows: Vec<(String, String, Option<String>, Option<String>)> = tokio::time::timeout(UNWIND_TIMEOUT, async {
         loop {
-            let rows: Vec<(String, Option<String>)> = sqlx::query_as(
-                "SELECT role, blocks FROM chat_messages WHERE session_id = 's-always' \
+            let rows: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+                "SELECT role, id, blocks, turn_row_id FROM chat_messages WHERE session_id = 's-always' \
                  ORDER BY created_at, id",
             )
             .fetch_all(&state.db)
             .await
             .expect("读 chat_messages");
-            if rows.iter().any(|(r, _)| r == "assistant") && rows.iter().any(|(r, _)| r == "system")
+            if rows.iter().any(|(r, _, _, _)| r == "assistant")
+                && rows.iter().any(|(r, _, _, _)| r == "system")
             {
                 break rows;
             }
@@ -770,24 +771,24 @@ async fn always_auto_mode_answers_permission_on_arrival_not_next_tick() {
     })
     .await
     .expect("assistant 内联帧 + 独立 system 兜底行都应在定稿后落库");
-    let system_blocks = rows
-        .iter()
-        .find(|(r, _)| r == "system")
-        .and_then(|(_, b)| b.clone())
-        .expect("独立 system 行");
+    let system_row = rows.iter().find(|(r, _, _, _)| r == "system").expect("独立 system 行");
+    let system_blocks = system_row.2.clone().expect("system 行 blocks");
     assert!(
         system_blocks.contains(crate::acp::reaper::SYSTEM_LABEL_PERM_TIMEOUT_AUTO),
         "落库的 system 行应带 i18n label"
     );
     assert!(system_blocks.contains(&notice_id), "system 行应带同一 noticeId");
-    let assistant_blocks = rows
-        .iter()
-        .find(|(r, _)| r == "assistant")
-        .and_then(|(_, b)| b.clone())
-        .expect("assistant 行");
+    let assistant_row = rows.iter().find(|(r, _, _, _)| r == "assistant").expect("assistant 行");
+    let assistant_blocks = assistant_row.2.clone().expect("assistant 行 blocks");
     assert!(
         assistant_blocks.contains("omnitermSystem") && assistant_blocks.contains(&notice_id),
         "告知帧应内联进 assistant 行的有序帧窗口：{assistant_blocks}"
+    );
+    // 归属（2026-10-26 D2）：帧被逐出、noticeId 去重失效时前端据此归块进过程容器。
+    assert_eq!(
+        system_row.3.as_deref(),
+        Some(assistant_row.1.as_str()),
+        "独立 system 行的 turn_row_id 必须等于其所在 turn 的 assistant 行 id"
     );
 
     reaper.abort();

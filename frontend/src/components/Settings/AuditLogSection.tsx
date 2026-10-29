@@ -26,6 +26,8 @@ const ACTION_KEYS: Record<AuditActionName, string> = {
   agent_update: 'agentUpdate',
   agent_delete: 'agentDelete',
   proxy_access: 'proxyAccess',
+  proxy_denied: 'proxyDenied',
+  proxy_settings_changed: 'proxySettingsChanged',
   auth_login: 'authLogin',
   auth_setup: 'authSetup',
   auth_logout: 'authLogout',

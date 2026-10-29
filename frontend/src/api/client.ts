@@ -8,6 +8,19 @@ const BASE = '/api/v1'
  *  请求并回收会话（默认，2026-08-18 起的安全策略）。 */
 export type PermissionTimeoutMode = 'wait' | 'auto' | 'abort'
 
+/** 端口转发代理端口策略（后端 `proxy_port_mode` 白名单值）：
+ *  `default` = 现有安全范围（3000..=65535 − 硬编码黑名单 − 自身端口）；
+ *  `allowlist` = 仅 `allowed_ports` 内端口（空清单 = 全拒）。 */
+export type ProxyPortMode = 'default' | 'allowlist'
+
+/** 代理安全配置（GET/PUT `/settings/proxy` 的线格式，snake_case 由后端决定）。 */
+export interface ProxySettings {
+  enabled: boolean
+  mode: ProxyPortMode
+  /** 严格模式放行清单：后端去重升序，最多 64 条；黑名单/自身端口不可加入。 */
+  allowed_ports: number[]
+}
+
 /** 审计动作枚举（后端 `api::audit::AuditAction::as_str`）。**协议稳定值**，
  *  改名等于改协议；新增动作须后端先落地再在此追加。 */
 export type AuditActionName =
@@ -19,6 +32,8 @@ export type AuditActionName =
   | 'agent_update'
   | 'agent_delete'
   | 'proxy_access'
+  | 'proxy_denied'
+  | 'proxy_settings_changed'
   | 'auth_login'
   | 'auth_setup'
   | 'auth_logout'
@@ -332,7 +347,13 @@ export const api = {
 
   // System
   systemInfo: () =>
-    request<{ home_dir: string; multiplexer?: string; proxy_domain?: string | null }>('/system/info'),
+    request<{
+      home_dir: string
+      multiplexer?: string
+      proxy_domain?: string | null
+      /** 端口转发代理全局开关（P4）；旧后端缺省时按 true 处理。 */
+      proxy_enabled?: boolean
+    }>('/system/info'),
   // Multiplexer (tmux/psmux) availability probe: 200 {available:true} or
   // 503 {available:false, install_hints}. silent — absence is a normal state
   // (pty-only hosts), surfaced as a disabled option, not an error toast.
@@ -419,6 +440,16 @@ export const api = {
     request<{ mode: PermissionTimeoutMode; seconds: number }>('/settings/permission-timeout', {
       method: 'PUT',
       body: JSON.stringify({ mode, seconds }),
+    }),
+  /** 端口转发代理安全配置（P4）：全局开关 + 端口策略 + 放行清单。
+   *  失败由 ProxySection 内联展示，故 silent（避免全局 toast 重复报错）。 */
+  getProxySettings: () =>
+    request<ProxySettings>('/settings/proxy', { silent: true }),
+  setProxySettings: (settings: ProxySettings) =>
+    request<ProxySettings>('/settings/proxy', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+      silent: true,
     }),
   /** 安全审计日志（只读）：最近若干条敏感操作留痕（文件写/删/上传、git push、
    *  agent 配置变更、代理端口首次被访问）。后端对 limit 收敛（缺省 50、硬顶 200）。

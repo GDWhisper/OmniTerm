@@ -5,31 +5,44 @@ import { useAppStore } from '../../stores/appStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
 import { readDeleteAgentSidePref, writeDeleteAgentSidePref } from '../../utils/deleteAgentSidePref'
+import type { PopoverAnchor } from '../../utils/popover'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
+import { PopoverConfirm } from '../Common/PopoverConfirm'
 import {
   buildAgentSideDeleteCheckbox,
   resolvePendingAgentSide,
   shouldRequestAgentSideDelete,
 } from './agentSideDelete'
 
-export interface DeleteTarget {
-  type: 'project' | 'session'
-  id: string
-  name: string
-  /**
-   * 会话的运行时类型（`type === 'session'` 时才有意义）。决定是否显示
-   * 「同时永久删除 agent 侧会话记录」勾选框——项目删除不带该框。
-   */
-  runtimeKind?: Session['runtime_kind']
-  /**
-   * ACP 会话的 agent 侧删除上下文：`DELETE /sessions/{id}` 返回 `pending`（进程
-   * 不驻留）时，行已删、后端取不到这些值，由前端带着它们补发 agent 侧删除端点
-   * （两段式的第二段）。非 ACP / 缺省时不影响勾选框可用性。
-   */
-  acpSessionId?: string
-  agentId?: string
-  workspacePath?: string
-}
+export type DeleteTarget =
+  | {
+      type: 'project'
+      id: string
+      name: string
+    }
+  | {
+      type: 'session'
+      id: string
+      name: string
+      /**
+       * 会话的运行时类型。决定是否显示「同时永久删除 agent 侧会话记录」
+       * 勾选框——项目删除不带该框。
+       */
+      runtimeKind?: Session['runtime_kind']
+      /**
+       * ACP 会话的 agent 侧删除上下文：`DELETE /sessions/{id}` 返回 `pending`（进程
+       * 不驻留）时，行已删、后端取不到这些值，由前端带着它们补发 agent 侧删除端点
+       * （两段式的第二段）。非 ACP / 缺省时不影响勾选框可用性。
+       */
+      acpSessionId?: string
+      agentId?: string
+      workspacePath?: string
+      /**
+       * 点击时删除按钮的视口矩形：单条会话确认渲染为锚定气泡
+       * （PopoverConfirm），必须贴在触发按钮旁边而不是弹全屏模态。
+       */
+      anchor: PopoverAnchor
+    }
 
 /**
  * Delete confirmation shared by projects and sessions. Store cleanup (clearing
@@ -37,9 +50,14 @@ export interface DeleteTarget {
  * happens here via useAppStore. The Sidebar only supplies the delete target and
  * reload callbacks.
  *
- * **会话删除不阻塞界面**：确认后立即关弹窗，请求在后台执行，结果（含 agent
+ * **两种载体**：单条会话删除是贴着行内删除按钮的锚定气泡
+ * （`PopoverConfirm`），不弹全屏模态、不打断侧栏上下文；项目删除仍是
+ * `ConfirmDialog`（从项目卡片触发，级联清理属于更大的动作，用模态承载）。
+ * 批量删除在 `BatchSessionDialog` 中保持模态。
+ *
+ * **会话删除不阻塞界面**：确认后立即关气泡，请求在后台执行，结果（含 agent
  * 侧 `deleted`/`skipped`）由右下角 toast 如实上报——agent 侧删除可能临时拉起
- * agent 进程，不该把整个界面扣在模态上。项目删除仍走 `submitting` 加载态
+ * agent 进程，不该把整个界面扣在确认层上。项目删除仍走 `submitting` 加载态
  * （纯本地级联清理，秒级）。
  *
  * ACP 会话额外带「同时永久删除 agent 侧会话记录」勾选框（红字，判据见
@@ -71,11 +89,10 @@ export function DeleteConfirmDialog(props: {
   const [submitting, setSubmitting] = useState(false)
 
   const target = props.target
-  const isSession = target?.type === 'session'
 
   // 勾选框：仅 ACP 会话出现；默认值 = 用户上次的选择（记住偏好，不反复询问）
   const { checkbox, eligibleIds } =
-    isSession && target?.runtimeKind === 'acp'
+    target?.type === 'session' && target.runtimeKind === 'acp'
       ? buildAgentSideDeleteCheckbox({
           candidates: [{ id: target.id, runtime_kind: target.runtimeKind }],
           capabilityOf: () => agentDeleteSupported,
@@ -121,8 +138,8 @@ export function DeleteConfirmDialog(props: {
     // 记住用户的选择（勾选与取消都记）：仅在勾选框**可用**时记录——禁用态
     // 是系统的限制而非用户的表达，写进去会把「不支持」固化成偏好。
     const rememberChoice = !!checkbox && !checkbox.disabled
-    // 立即关弹窗、**不等待请求**：agent 侧删除可能需要临时拉起 agent 进程
-    // （秒级起步，超时上限更长），不能把整个界面扣在模态上。执行在后台继续，
+    // 立即关气泡、**不等待请求**：agent 侧删除可能需要临时拉起 agent 进程
+    // （秒级起步，超时上限更长），不能把整个界面扣在确认层上。执行在后台继续，
     // 完成后由右下角 toast 如实上报（与 archiveSessionNow 的「先关弹窗、后报
     // 结果」先例一致）。列表行由完成后的刷新 + 侧栏 3s 轮询收走。
     props.onClose()
@@ -161,23 +178,36 @@ export function DeleteConfirmDialog(props: {
     })()
   }
 
+  if (target?.type === 'session') {
+    return (
+      <PopoverConfirm
+        // 直接从一个删除按钮切到另一行时也重挂：勾选状态与焦点必须是新目标的
+        key={target.id}
+        open
+        anchor={target.anchor}
+        onClose={props.onClose}
+        onConfirm={handleDeleteSession}
+        title={t('sidebar.deleteSession')}
+        message={t('sidebar.confirmDeleteSession', { name: target.name })}
+        confirmText={t('sidebar.delete')}
+        destructive
+        checkbox={checkbox}
+      />
+    )
+  }
+
   return (
     <ConfirmDialog
       open={!!target}
       onClose={props.onClose}
-      onConfirm={target?.type === 'project' ? handleDeleteProject : () => handleDeleteSession(false)}
-      onConfirmWithChecked={
-        checkbox ? (checked: boolean) => handleDeleteSession(checked) : undefined
-      }
-      title={target?.type === 'project' ? (t('sidebar.deleteProject') ?? 'Remove Project from List') : t('sidebar.deleteSession')}
+      onConfirm={handleDeleteProject}
+      title={t('sidebar.deleteProject') ?? 'Remove Project from List'}
       message={
         target?.type === 'project'
-          ? (t('sidebar.confirmDeleteProject', { name: target?.name }) ?? `Remove project "${target?.name}" from the list? Files on disk are not affected.`)
-          : t('sidebar.confirmDeleteSession', { name: target?.name })
+          ? (t('sidebar.confirmDeleteProject', { name: target.name }) ?? `Remove project "${target.name}" from the list? Files on disk are not affected.`)
+          : ''
       }
-      checkbox={checkbox}
-      confirmText={target?.type === 'project' ? t('sidebar.remove') : t('sidebar.delete')}
-      destructive={target?.type === 'session'}
+      confirmText={t('sidebar.remove')}
       loading={submitting}
     />
   )

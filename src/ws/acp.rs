@@ -812,9 +812,17 @@ async fn persist_and_broadcast_turn_end_notice(
         { "type": "system", "label": notice.label, "detail": notice.detail }
     ])
     .to_string();
-    if let Err(e) =
-        chat_persistence::insert_message(db, session_id, "system", &notice.text, Some(&blocks))
-            .await
+    // 终态告知刻意不带 turn 归属：它是「turn 之后」的失败提示，必须留在消息流
+    // 可见位（前端不把它折进过程容器），归块反而会弱化可见性（计划 D2）。
+    if let Err(e) = chat_persistence::insert_message(
+        db,
+        session_id,
+        "system",
+        &notice.text,
+        Some(&blocks),
+        None,
+    )
+    .await
     {
         tracing::warn!(
             session_id = %session_id,
@@ -1321,7 +1329,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                     serde_json::to_string(&arr).ok()
                                 };
                                 let _ = chat_persistence::insert_message(
-                                    &db, &sid, "user", &prompt_text, blocks_json.as_deref(),
+                                    &db, &sid, "user", &prompt_text, blocks_json.as_deref(), None,
                                 ).await;
 
                                 // 解析 @path 文件引用（失败静默跳过，不阻塞发送）
@@ -2505,7 +2513,9 @@ exit 0
         client.mark_prompt_active();
 
         // 正文行先落（真实路径上它由 mark_prompt_idle() 的定稿写入，发生在本调用之前）。
-        insert_message(&db, SESSION, "user", "帮我做件事", None).await.expect("seed user row");
+        insert_message(&db, SESSION, "user", "帮我做件事", None, None)
+            .await
+            .expect("seed user row");
 
         notice_turn_end_if_abnormal(&client, &db, SESSION, &StopReason::Refusal).await;
 

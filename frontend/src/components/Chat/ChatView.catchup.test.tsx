@@ -11,6 +11,8 @@ import {
   resetChatViewStores,
   seedChatMessages,
   installResizeObserverSpy,
+  chatScrollEl,
+  mockScrollMetrics,
 } from './ChatView.testUtils'
 
 // 聚焦补拉接线（docs/dev/plans/2026-10-01-acp-refocus-latest-merge.md）：
@@ -59,8 +61,20 @@ async function resumeAfterHidden(awayMs: number) {
   act(() => {
     document.dispatchEvent(new Event('visibilitychange'))
   })
+  // 补拉已被错峰调度（D2）挪进定时器任务；fake→real 切换会丢弃已排定的 fake
+  // 定时器，必须先推进一拍让任务真正发出，再交还真实时钟。
+  vi.advanceTimersByTime(0)
   vi.useRealTimers()
-  await act(async () => {})
+  await flushCatchUp()
+}
+
+/** 等一拍真实宏任务：补拉错峰（D2）把 GET /messages 挪进 setTimeout(0)/idle
+ *  任务（jsdom 无 requestIdleCallback，走 setTimeout 分支），断言前必须让任务
+ *  队列转一圈——排定晚于补拉任务，FIFO 保证 resolve 时补拉已发出。 */
+async function flushCatchUp() {
+  await act(async () => {
+    await new Promise<void>((r) => setTimeout(r, 0))
+  })
 }
 
 beforeEach(() => {
@@ -112,7 +126,7 @@ describe('ChatView refocus catch-up', () => {
     })
 
     renderView()
-    await act(async () => {})
+    await flushCatchUp()
 
     expect(catchUpCalls()).toHaveLength(1)
     expect(String(catchUpCalls()[0][0])).not.toContain('before=')
@@ -138,7 +152,7 @@ describe('ChatView refocus catch-up', () => {
     seedChatMessages([userMsg('u1', 'q', { createdAt: 1_000 })])
     useChatStore.getState().setNeedsCatchUp(SESSION_ID, true)
     renderView()
-    await act(async () => {})
+    await flushCatchUp()
     // 挂载时已拉过一次并清标记。先隐藏再造一次断连——标记必须埋在 hidden 态：
     // 可见态置标记会被 E2 立即消费（见勘误用例），那个语义由它自己守。
     setDocumentHidden(true)
@@ -148,14 +162,14 @@ describe('ChatView refocus catch-up', () => {
     act(() => {
       useChatStore.getState().setNeedsCatchUp(SESSION_ID, true)
     })
-    await act(async () => {})
+    await flushCatchUp()
     expect(catchUpCalls()).toHaveLength(1)
 
     setDocumentHidden(false)
     act(() => {
       document.dispatchEvent(new Event('visibilitychange'))
     })
-    await act(async () => {})
+    await flushCatchUp()
     expect(catchUpCalls()).toHaveLength(2)
     expect(useChatStore.getState().states[SESSION_ID].needsCatchUp).toBe(false)
   })
@@ -165,7 +179,7 @@ describe('ChatView refocus catch-up', () => {
     useChatStore.getState().setNeedsCatchUp(SESSION_ID, true)
     fetchMock.mockResolvedValue({ ok: false, json: async () => ({}) })
     renderView()
-    await act(async () => {})
+    await flushCatchUp()
     expect(catchUpCalls()).toHaveLength(1)
     expect(useChatStore.getState().states[SESSION_ID].needsCatchUp).toBe(true)
   })
@@ -205,7 +219,7 @@ describe('ChatView refocus catch-up', () => {
     })
 
     renderView()
-    await act(async () => {})
+    await flushCatchUp()
 
     const syncCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes('/messages/sync'))
     expect(syncCalls).toHaveLength(1)
@@ -319,8 +333,10 @@ describe('ChatView resume catch-up fallbacks (2026-10-04 勘误)', () => {
     act(() => {
       window.dispatchEvent(ev)
     })
+    // 错峰任务已排进 fake 队列，切回真时钟前推进一拍让它发出（同 resumeAfterHidden）。
+    vi.advanceTimersByTime(0)
     vi.useRealTimers()
-    await act(async () => {})
+    await flushCatchUp()
 
     expect(catchUpCalls()).toHaveLength(1)
     expect(useChatStore.getState().states[SESSION_ID].needsCatchUp).toBe(false)
@@ -346,7 +362,7 @@ describe('ChatView resume catch-up fallbacks (2026-10-04 勘误)', () => {
     act(() => {
       useChatStore.getState().setNeedsCatchUp(SESSION_ID, true)
     })
-    await act(async () => {})
+    await flushCatchUp()
 
     expect(catchUpCalls()).toHaveLength(1)
     expect(useChatStore.getState().states[SESSION_ID].needsCatchUp).toBe(false)
@@ -369,5 +385,85 @@ describe('ChatView resume catch-up fallbacks (2026-10-04 勘误)', () => {
 
     expect(catchUpCalls()).toHaveLength(0)
     expect(useChatStore.getState().states[SESSION_ID].needsCatchUp).toBe(true)
+  })
+})
+
+/**
+ * 2026-10-10 计划 ②：补拉错峰与上拉互斥。
+ * - 可见性/聚焦恢复不再在事件回调里同步发 GET——同一帧还挤着 flushLiveBuffer
+ *   （隐藏期积压）与重渲染，补拉挪进独立的短延迟任务（requestIdleCallback 降级
+ *   setTimeout(0)，jsdom 无前者，走 setTimeout 分支）。
+ * - 补拉与上拉分页互斥（双向）：两个请求都动消息列表与滚动锚点，并发落定顺序
+ *   不可控。正向（触顶加载会发请求）由 ChatView.topload.test.tsx 固化。
+ */
+describe('ChatView catch-up staggering & pagination mutex (2026-10-10 ②)', () => {
+  it('回到可见后不在事件回调里同步发请求，延迟任务里才发', async () => {
+    seedChatMessages([userMsg('u1', 'q', { createdAt: 1_000 })])
+    useChatStore.getState().setNeedsCatchUp(SESSION_ID, true)
+    renderView()
+    await flushCatchUp()
+    // 挂载已拉过一次并清标记。重新造断连（hidden 态埋标记，避免 E2 抢跑）。
+    setDocumentHidden(true)
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    act(() => {
+      useChatStore.getState().setNeedsCatchUp(SESSION_ID, true)
+    })
+    await flushCatchUp()
+    setDocumentHidden(false)
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    // 错峰断言：事件派发后的同一轮宏任务里不发请求（同步发会立即可见）。
+    expect(catchUpCalls()).toHaveLength(1)
+    await flushCatchUp()
+    expect(catchUpCalls()).toHaveLength(2)
+  })
+
+  it('上拉分页在飞（loadingHistory）时补拉被挡，标记保留', async () => {
+    seedChatMessages([userMsg('u1', 'q', { createdAt: 1_000 })])
+    renderView()
+    await act(async () => {})
+    // 模拟上拉请求在飞（store 侧置位；无需真发请求）+ 断连标记到达。
+    act(() => {
+      useChatStore.getState().beginLoadHistory(SESSION_ID)
+      useChatStore.getState().setNeedsCatchUp(SESSION_ID, true)
+    })
+    await flushCatchUp()
+    expect(catchUpCalls()).toHaveLength(0)
+    expect(useChatStore.getState().states[SESSION_ID].needsCatchUp).toBe(true)
+  })
+
+  it('补拉在飞时触顶上拉不发请求（反向互斥）', async () => {
+    // 游标非空 = 还有更早历史可拉，触顶条件才可能成立。
+    useChatStore.getState().hydrate(
+      SESSION_ID,
+      [userMsg('u1', 'q', { createdAt: 1_000 })],
+      'cursor-1',
+    )
+    useChatStore.getState().setHydrated(SESSION_ID, true)
+    renderView()
+    await act(async () => {})
+    // 补拉发出后挂起（fetch 永不落定）→ catchUpInFlightRef 常驻 true。
+    act(() => {
+      useChatStore.getState().setNeedsCatchUp(SESSION_ID, true)
+    })
+    fetchMock.mockImplementationOnce(() => new Promise(() => {}))
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    await flushCatchUp()
+    expect(catchUpCalls()).toHaveLength(1)
+
+    const el = chatScrollEl(container)
+    mockScrollMetrics(el, { scrollTop: 100, clientHeight: 600, scrollHeight: 2000 })
+    act(() => {
+      el.dispatchEvent(new Event('scroll'))
+    })
+    await flushCatchUp()
+    // 没有第二个请求（上拉的 before= 被 catchUpInFlightRef 挡下）。
+    expect(catchUpCalls()).toHaveLength(1)
+    expect(catchUpCalls().every(([url]) => !String(url).includes('before='))).toBe(true)
   })
 })

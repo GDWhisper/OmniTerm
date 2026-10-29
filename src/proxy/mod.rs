@@ -30,6 +30,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::any,
 };
+use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeInclusive;
 use std::sync::OnceLock;
@@ -103,7 +104,218 @@ pub fn is_port_allowed(port: u16, self_port: u16) -> bool {
     port != self_port
 }
 
-/// 代理模块状态：reqwest 客户端单例 + 自身监听端口 + 审计首访登记。
+/// settings 表 key：代理全局开关（`"1"` / `"0"`）。缺失/脏值按开启处理，
+/// 保持引入该设置前的既有行为。
+pub const KEY_PROXY_ENABLED: &str = "proxy_enabled";
+
+/// settings 表 key：端口策略模式（`"default"` / `"allowlist"`）。
+/// 缺失/脏值回退 `default`（现有安全范围）。
+pub const KEY_PROXY_MODE: &str = "proxy_port_mode";
+
+/// settings 表 key：严格模式放行清单（JSON 数组，如 `"[3000,5173]"`）。
+pub const KEY_PROXY_ALLOWED_PORTS: &str = "proxy_allowed_ports";
+
+/// 放行清单条数上限（§P1）：典型开发场景远小于此；防止 settings 值无界增长
+/// 与 UI 行数失控。
+pub const MAX_PROXY_ALLOWED_PORTS: usize = 64;
+
+/// 拒绝审计登记表容量（§P1）。认证态下一个进程生命周期最多新增这么多条
+/// `proxy_denied`，防止探测流量冲掉 1000 行的滚动台账。
+pub const MAX_TRACKED_PROXY_DENIALS: usize = 256;
+
+/// 端口策略模式。**只能收窄、不能放宽**硬边界（见 [`is_port_allowed`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyPortMode {
+    /// 现有安全范围：3000..=65535 − 黑名单 − 自身端口。
+    Default,
+    /// 仅放行清单内端口；空清单 = 全拒（fail closed）。
+    Allowlist,
+}
+
+impl ProxyPortMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Allowlist => "allowlist",
+        }
+    }
+
+    fn from_str_opt(value: &str) -> Option<Self> {
+        match value {
+            "default" => Some(Self::Default),
+            "allowlist" => Some(Self::Allowlist),
+            _ => None,
+        }
+    }
+}
+
+/// 一次代理请求的策略判定结果（`Copy`，便于立即释放策略读锁）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyPolicyDecision {
+    Allowed,
+    Disabled,
+    PortDenied,
+}
+
+/// 拒绝原因。同时用于审计 detail 与去重键。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProxyDenyReason {
+    Disabled,
+    PortNotAllowed,
+}
+
+impl ProxyDenyReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::PortNotAllowed => "port_not_allowed",
+        }
+    }
+
+    fn detail_json(self) -> &'static str {
+        match self {
+            Self::Disabled => r#"{"reason":"disabled"}"#,
+            Self::PortNotAllowed => r#"{"reason":"port_not_allowed"}"#,
+        }
+    }
+}
+
+/// 代理运行时策略快照：启动时从 settings 加载，PUT 成功后整体替换。
+///
+/// 读路径（每个代理请求）只取判定结果，不查 DB；锁不得跨 `await` 持有。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyPolicy {
+    enabled: bool,
+    mode: ProxyPortMode,
+    allowed_ports: BTreeSet<u16>,
+}
+
+impl Default for ProxyPolicy {
+    fn default() -> Self {
+        Self { enabled: true, mode: ProxyPortMode::Default, allowed_ports: BTreeSet::new() }
+    }
+}
+
+/// PUT 校验错误（全部映射为 400）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyPolicyUpdateError {
+    InvalidMode,
+    TooManyPorts,
+    PortNotAllowed,
+}
+
+impl ProxyPolicy {
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn mode(&self) -> ProxyPortMode {
+        self.mode
+    }
+
+    /// 去重、升序后的放行清单（用于 API 响应与落库）。
+    pub fn allowed_ports(&self) -> Vec<u16> {
+        self.allowed_ports.iter().copied().collect()
+    }
+
+    /// 同步判定：先过不可配置的硬边界，再按模式收窄。
+    pub fn decide(&self, port: u16, self_port: u16) -> ProxyPolicyDecision {
+        if !self.enabled {
+            return ProxyPolicyDecision::Disabled;
+        }
+        if !is_port_allowed(port, self_port) {
+            return ProxyPolicyDecision::PortDenied;
+        }
+        match self.mode {
+            ProxyPortMode::Default => ProxyPolicyDecision::Allowed,
+            ProxyPortMode::Allowlist if self.allowed_ports.contains(&port) => {
+                ProxyPolicyDecision::Allowed
+            }
+            ProxyPortMode::Allowlist => ProxyPolicyDecision::PortDenied,
+        }
+    }
+
+    /// 严格校验 PUT 载荷：非法 mode / 超上限 / 硬边界外端口一律拒绝。
+    ///
+    /// 黑名单、黑名单段、自身端口即使出现在清单里也拒绝（设置只能收窄）。
+    pub fn from_update(
+        enabled: bool,
+        mode: &str,
+        ports: &[u16],
+        self_port: u16,
+    ) -> Result<Self, ProxyPolicyUpdateError> {
+        let mode = ProxyPortMode::from_str_opt(mode).ok_or(ProxyPolicyUpdateError::InvalidMode)?;
+        if ports.len() > MAX_PROXY_ALLOWED_PORTS {
+            return Err(ProxyPolicyUpdateError::TooManyPorts);
+        }
+        let mut allowed_ports = BTreeSet::new();
+        for &port in ports {
+            if !is_port_allowed(port, self_port) {
+                return Err(ProxyPolicyUpdateError::PortNotAllowed);
+            }
+            allowed_ports.insert(port);
+        }
+        Ok(Self { enabled, mode, allowed_ports })
+    }
+
+    /// 宽容加载存量配置：缺失/脏值回退默认，非法端口逐条丢弃并 warn。
+    ///
+    /// 任何解析失败都只会让策略**更窄**（严格模式丢空 = 全拒），不会放宽硬边界。
+    pub fn from_stored(
+        enabled: Option<&str>,
+        mode: Option<&str>,
+        ports: Option<&str>,
+        self_port: u16,
+    ) -> Self {
+        let enabled = match enabled {
+            None | Some("1") => true,
+            Some("0") => false,
+            Some(other) => {
+                tracing::warn!(value = other, "proxy_enabled 值非法，按开启处理");
+                true
+            }
+        };
+        let mode = match mode {
+            None => ProxyPortMode::Default,
+            Some(raw) => ProxyPortMode::from_str_opt(raw).unwrap_or_else(|| {
+                tracing::warn!(value = raw, "proxy_port_mode 值非法，回退 default");
+                ProxyPortMode::Default
+            }),
+        };
+        let mut allowed_ports = BTreeSet::new();
+        if let Some(raw) = ports {
+            match serde_json::from_str::<Vec<u64>>(raw) {
+                Ok(list) => {
+                    let truncated = list.len() > MAX_PROXY_ALLOWED_PORTS;
+                    let mut dropped = 0usize;
+                    for value in list.into_iter().take(MAX_PROXY_ALLOWED_PORTS) {
+                        match u16::try_from(value) {
+                            Ok(port) if is_port_allowed(port, self_port) => {
+                                allowed_ports.insert(port);
+                            }
+                            _ => dropped += 1,
+                        }
+                    }
+                    if truncated {
+                        tracing::warn!(
+                            max = MAX_PROXY_ALLOWED_PORTS,
+                            "proxy_allowed_ports 超出上限，超出部分已丢弃"
+                        );
+                    }
+                    if dropped > 0 {
+                        tracing::warn!(dropped, "proxy_allowed_ports 含非法/硬拒绝端口，已丢弃");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "proxy_allowed_ports 不是合法 JSON 数组，按空清单处理");
+                }
+            }
+        }
+        Self { enabled, mode, allowed_ports }
+    }
+}
+
+/// 代理模块状态：reqwest 客户端单例 + 自身监听端口 + 运行时策略 + 审计去重登记。
 #[derive(Clone)]
 pub struct ProxyState {
     pub client: reqwest::Client,
@@ -114,6 +326,10 @@ pub struct ProxyState {
     /// 请求体上限（默认 `MAX_REQUEST_BODY` = 2MB）。由 `--proxy-max-body` /
     /// `OMNITERM_PROXY_MAX_BODY` 注入（见 main.rs），供大文件上传场景调大。
     pub max_request_body: usize,
+    /// 运行时端口策略（settings 表 `proxy_enabled` / `proxy_port_mode` /
+    /// `proxy_allowed_ports` 的内存镜像）。启动加载，PUT 成功后整体替换；
+    /// 热路径只读快照，不查 DB。
+    pub policy: std::sync::Arc<std::sync::RwLock<ProxyPolicy>>,
     /// 已记过审计的端口集合（S5）。代理**没有「开通」原子事件**——
     /// `dispatch_proxy` 是 catch-all，任何端口首次被访问即打通，故审计只能
     /// 插在入口处按「首次出现的端口记一条」记。不做这个去重的话，
@@ -123,47 +339,57 @@ pub struct ProxyState {
     /// 65535 个且白名单范围是 3000..=65535，理论上限远小于此，故该淘汰
     /// 路径正常不可达，仅作防御（§P1：兜底路径不会因为叫兜底就不增长）。
     pub audited_ports: std::sync::Arc<std::sync::Mutex<PortAuditLog>>,
+    /// 拒绝审计去重登记（`proxy_denied`）：按 `(端口, 原因)` 首次出现记录，
+    /// 容量 `MAX_TRACKED_PROXY_DENIALS`。仅认证开启时使用（见 audit 模块头）。
+    pub audited_denials: std::sync::Arc<std::sync::Mutex<ProxyDenyLog>>,
 }
 
-/// 已审计端口登记表（`ProxyState::audited_ports` 的内部实现）。
-///
-/// `insert` 返回 `true` 表示这是该端口**首次**被访问（调用方应记审计），
-/// 之后同一端口重复访问返回 `false`（不再重复记录）。
-#[derive(Default)]
-pub struct PortAuditLog {
-    seen: std::collections::HashSet<u16>,
-    /// 登记顺序（仅用于同容量淘汰）：VecDeque 已足够，端口去重由 `seen` 负责。
-    order: std::collections::VecDeque<u16>,
+/// 有界「首次出现」登记表：`insert` 首次返回 `true`（调用方应记审计），
+/// 重复返回 `false`；超限淘汰最早登记者（被淘汰的键再出现会重新记一条，
+/// 有界内存优先于不漏记，§P1）。
+pub struct BoundedSeenSet<K, const CAP: usize> {
+    seen: HashSet<K>,
+    /// 登记顺序（仅用于同容量淘汰）：VecDeque 已足够，去重由 `seen` 负责。
+    order: VecDeque<K>,
+}
+
+impl<K, const CAP: usize> Default for BoundedSeenSet<K, CAP> {
+    fn default() -> Self {
+        Self { seen: HashSet::new(), order: VecDeque::new() }
+    }
+}
+
+impl<K: Eq + std::hash::Hash + Clone, const CAP: usize> BoundedSeenSet<K, CAP> {
+    /// 登记一次事件。首次出现返回 `true`（应记审计）。
+    pub fn insert(&mut self, key: K) -> bool {
+        if !self.seen.insert(key.clone()) {
+            return false;
+        }
+        self.order.push_back(key);
+        if self.order.len() > CAP
+            && let Some(old) = self.order.pop_front()
+        {
+            self.seen.remove(&old);
+        }
+        true
+    }
+
+    /// 当前登记数（单测用）。
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.seen.len()
+    }
 }
 
 /// 已审计端口登记表容量上限（§P1）：白名单端口范围 3000..=65535 共 62536 个，
 /// 取 4096 足以覆盖任何真实使用形态，同时把内存占用钉死在 KB 级。
 pub const MAX_TRACKED_PROXY_PORTS: usize = 4096;
 
-impl PortAuditLog {
-    /// 登记一次访问尝试。首次访问返回 `true`（应记审计）。
-    pub fn insert(&mut self, port: u16) -> bool {
-        if !self.seen.insert(port) {
-            return false;
-        }
-        self.order.push_back(port);
-        if self.order.len() > MAX_TRACKED_PROXY_PORTS {
-            // 淘汰最早登记者。被淘汰的端口若再被访问会被当成「首次」重新记
-            // 一条——这是在「有界内存」与「不漏记」之间的取舍，取前者
-            // （内存无界是 §P1 红线，重复一条审计只是噪音）。
-            if let Some(old) = self.order.pop_front() {
-                self.seen.remove(&old);
-            }
-        }
-        true
-    }
+/// 代理首访审计登记表（按端口去重）。
+pub type PortAuditLog = BoundedSeenSet<u16, MAX_TRACKED_PROXY_PORTS>;
 
-    /// 当前登记的端口数（单测用）。
-    #[cfg(test)]
-    pub fn len(&self) -> usize {
-        self.seen.len()
-    }
-}
+/// 代理拒绝审计登记表（按 `(端口, 原因)` 去重，有界见 `MAX_TRACKED_PROXY_DENIALS`）。
+pub type ProxyDenyLog = BoundedSeenSet<(u16, ProxyDenyReason), MAX_TRACKED_PROXY_DENIALS>;
 
 pub fn routes(state: AppState) -> Router<AppState> {
     Router::new()
@@ -195,16 +421,28 @@ async fn dispatch_proxy(
     upgrade: Option<WebSocketUpgrade>,
     request: Request,
 ) -> Response {
-    if !is_port_allowed(port, state.proxy.self_port) {
-        tracing::warn!("proxy port denied: {}", port);
-        return (StatusCode::FORBIDDEN, "port not allowed").into_response();
+    let client_ip = request_client_ip(&request);
+    // 策略判定：读锁只活在同步块里（std guard 非 Send，不得跨 await）。
+    let decision = {
+        let policy = state.proxy.policy.read().unwrap_or_else(|e| e.into_inner());
+        policy.decide(port, state.proxy.self_port)
+    };
+    let denied = match decision {
+        ProxyPolicyDecision::Allowed => None,
+        ProxyPolicyDecision::Disabled => Some((ProxyDenyReason::Disabled, "proxy disabled")),
+        ProxyPolicyDecision::PortDenied => {
+            Some((ProxyDenyReason::PortNotAllowed, "port not allowed"))
+        }
+    };
+    if let Some((reason, message)) = denied {
+        tracing::warn!(port, reason = reason.as_str(), "proxy request denied");
+        audit_proxy_denied(&state, client_ip, port, reason).await;
+        return (StatusCode::FORBIDDEN, message).into_response();
     }
 
     // 审计（S5）：代理无「开通」原子事件，catch-all 下首次访问即打通，
-    // 故在此按端口去重记一条。放在白名单校验**之后**——被拒绝的端口
-    // 不进登记表（它们的拒绝路径已有自己的 warn，且 no_upstream 类的
-    // 反复探测不该污染审计）。
-    let client_ip = request_client_ip(&request);
+    // 故在此按端口去重记一条。放在策略校验**之后**——被拒绝的端口
+    // 不进登记表（它们的拒绝路径有自己的审计，见 `audit_proxy_denied`）。
     let first_access = {
         let mut log = state.proxy.audited_ports.lock().unwrap_or_else(|e| e.into_inner());
         log.insert(port)
@@ -230,8 +468,8 @@ async fn dispatch_proxy(
         // 浏览器发起的 WS 必带 Origin，其 host 必须与请求 Host 一致；跨站
         // 页面（如 evil.com 的 iframe）Origin 的 host 不同，拒绝。无 Origin /
         // 无 Host（curl/原生 WS 等非浏览器客户端）放行——CSWSH 只能由浏览器触发。
-        // 未直接用入口级 `enforce_ws_origin(&HeaderMap)`：此处须先经
-        // `is_ws_upgrade` 判定再分流，且 let-chain 形态可少一次 HeaderMap 拷贝。
+        // 路径前缀与子域名两条入口的 WS 现在都经这里（子域名不再直连 relay），
+        // 因此 Origin 校验也只有一个调用面。
         if let Some(host) = host_from_request(&request)
             && let Some(origin) = request.headers().get(header::ORIGIN)
             && !crate::ws::origin_matches_host(origin, host)
@@ -243,6 +481,36 @@ async fn dispatch_proxy(
     }
 
     forward_http(state, port, uri, request, client_ip).await
+}
+
+/// 代理拒绝留痕：仅认证开启时记录（auth 关闭时整个服务匿名，拒绝事件可被
+/// 无限灌量冲掉台账），按 `(端口, 原因)` 首次出现去重，登记表有界。
+async fn audit_proxy_denied(
+    state: &AppState,
+    client_ip: Option<IpAddr>,
+    port: u16,
+    reason: ProxyDenyReason,
+) {
+    if !state.auth_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let first = {
+        let mut log = state.proxy.audited_denials.lock().unwrap_or_else(|e| e.into_inner());
+        log.insert((port, reason))
+    };
+    if !first {
+        return;
+    }
+    let ctx =
+        crate::api::audit::AuditContext::from_ip(client_ip, Some(format!("proxy_port:{port}")));
+    crate::api::audit::record(
+        &state.db,
+        &ctx,
+        crate::api::audit::AuditAction::ProxyDenied,
+        &port.to_string(),
+        Some(reason.detail_json()),
+    )
+    .await;
 }
 
 /// 从 Host 头解析子域名端口：精确匹配 `"{port}.{base}"`（可带 `:{listen_port}` 后缀）。
@@ -279,14 +547,6 @@ fn host_from_request(request: &Request) -> Option<&str> {
     crate::ws::host_from_headers(request.headers())
 }
 
-fn is_ws_upgrade(request: &Request) -> bool {
-    request
-        .headers()
-        .get(header::UPGRADE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
-}
-
 /// 子域名 Host 路由中间件：`{port}.{base}` 命中时直接代理，否则放行给后续路由。
 ///
 /// 挂**最外层**（见 main.rs，仅 `base_host` 配置时挂载），先于 CorsLayer/TraceLayer/
@@ -307,15 +567,11 @@ pub async fn proxy_host_mw(
         return next.run(request).await;
     };
 
-    // 端口白名单（D2）：WS 分支绕过 dispatch_proxy，须在此先行校验，提前 403。
-    if !is_port_allowed(port, state.proxy.self_port) {
-        tracing::warn!("proxy host port denied: {}", port);
-        return (StatusCode::FORBIDDEN, "port not allowed").into_response();
-    }
-
     // 鉴权：子域名入口是 middleware，不走路由层 `require_auth_mw`，必须显式校验——
     // 否则 auth 开启时 `{port}.{base}` 成开放代理（§S4/S5）。子域 Host 恒为
     // `{port}.{base}`（非回环字面量）→ 永远不命中本地免密，无需专门排除。
+    //
+    // 顺序：鉴权先于策略。未认证请求统一 401，不通过 403/401 差异暴露端口策略。
     let peer = request.extensions().get::<ConnectInfo<SocketAddr>>().map(|ci| ci.0);
     let token = crate::auth::extract_token(&request, &state.token_cookie);
     if let Err(status) =
@@ -332,24 +588,13 @@ pub async fn proxy_host_mw(
         None => format!("/proxy/{}{}", port, orig.path()).parse().unwrap_or(orig.clone()),
     };
 
-    let client_ip = request_client_ip(&request);
-
-    if is_ws_upgrade(&request) {
-        let (mut parts, _body) = request.into_parts();
-        // Origin 校验（CSWSH 防御）：本分支绕过 `dispatch_proxy`，必须**在此单独校验**，
-        // 否则 `--proxy-domain` 子域形态下 `{port}.{base}` 的 WS 入口完全没有 Origin
-        // 关卡（其余三主入口与路径前缀 `/proxy/{port}` 都已校验）。与它们共用同一真源
-        // `crate::ws::enforce_ws_origin`——它正好吃 `&HeaderMap`，而 headers 就在 `parts` 上。
-        if let Some(rejected) = crate::ws::enforce_ws_origin(&parts.headers) {
-            return rejected;
-        }
-        return match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
-            Ok(ws) => ws::relay(ws, port, &normalized, parts.headers.clone(), client_ip).await,
-            Err(_) => (StatusCode::BAD_REQUEST, "invalid websocket upgrade").into_response(),
-        };
-    }
-
-    dispatch_proxy(state, port, normalized, None, request).await
+    // WS 探测与 HTTP 分流统一走 dispatch_proxy：策略判定、首访审计、Origin 校验
+    // 只有这一个关卡。此前子域名 WS 分支直连 `ws::relay`，绕过了以上全部三道
+    // （backend.md 的「判据共享 ≠ 调用点覆盖」教训）。
+    let (mut parts, body) = request.into_parts();
+    let upgrade = WebSocketUpgrade::from_request_parts(&mut parts, &state).await.ok();
+    let request = Request::from_parts(parts, body);
+    dispatch_proxy(state, port, normalized, upgrade, request).await
 }
 
 /// 构造目标上游 URL：`http://127.0.0.1:{port}/{剩余路径}?{原始 query}`。
@@ -982,6 +1227,116 @@ mod tests {
         assert!(is_port_allowed(65535, 9777));
     }
 
+    // ── 运行时策略（P4） ──
+
+    #[test]
+    fn proxy_policy_default_mode_matches_legacy_bounds() {
+        let policy = ProxyPolicy::default();
+        assert!(policy.enabled());
+        assert_eq!(policy.mode(), ProxyPortMode::Default);
+        assert!(policy.allowed_ports().is_empty());
+        assert_eq!(policy.decide(3000, 9777), ProxyPolicyDecision::Allowed);
+        assert_eq!(policy.decide(2999, 9777), ProxyPolicyDecision::PortDenied);
+        assert_eq!(policy.decide(3306, 9777), ProxyPolicyDecision::PortDenied);
+        assert_eq!(policy.decide(8500, 9777), ProxyPolicyDecision::PortDenied);
+        assert_eq!(policy.decide(9777, 9777), ProxyPolicyDecision::PortDenied);
+    }
+
+    #[test]
+    fn proxy_policy_allowlist_only_narrows() {
+        let policy = ProxyPolicy::from_update(true, "allowlist", &[5173, 3000], 9777)
+            .expect("valid allowlist");
+        assert_eq!(policy.allowed_ports(), vec![3000, 5173], "去重且升序");
+        assert_eq!(policy.decide(3000, 9777), ProxyPolicyDecision::Allowed);
+        assert_eq!(policy.decide(5173, 9777), ProxyPolicyDecision::Allowed);
+        assert_eq!(policy.decide(4000, 9777), ProxyPolicyDecision::PortDenied);
+
+        // 硬边界不可被清单放行。
+        assert_eq!(
+            ProxyPolicy::from_update(true, "allowlist", &[3306], 9777),
+            Err(ProxyPolicyUpdateError::PortNotAllowed)
+        );
+        assert_eq!(
+            ProxyPolicy::from_update(true, "allowlist", &[9777], 9777),
+            Err(ProxyPolicyUpdateError::PortNotAllowed)
+        );
+    }
+
+    #[test]
+    fn proxy_policy_empty_allowlist_denies_all() {
+        let policy = ProxyPolicy::from_update(true, "allowlist", &[], 9777)
+            .expect("empty allowlist is valid but denies all");
+        assert_eq!(policy.decide(3000, 9777), ProxyPolicyDecision::PortDenied);
+    }
+
+    #[test]
+    fn proxy_policy_disabled_wins_over_everything() {
+        let policy =
+            ProxyPolicy::from_update(false, "default", &[], 9777).expect("valid disabled policy");
+        assert_eq!(policy.decide(3000, 9777), ProxyPolicyDecision::Disabled);
+        assert_eq!(policy.decide(2999, 9777), ProxyPolicyDecision::Disabled);
+    }
+
+    #[test]
+    fn proxy_policy_update_validation() {
+        assert_eq!(
+            ProxyPolicy::from_update(true, "strict", &[], 9777),
+            Err(ProxyPolicyUpdateError::InvalidMode)
+        );
+        assert_eq!(
+            ProxyPolicy::from_update(true, "default", &[2999], 9777),
+            Err(ProxyPolicyUpdateError::PortNotAllowed)
+        );
+        assert_eq!(
+            ProxyPolicy::from_update(true, "default", &[9200], 9777),
+            Err(ProxyPolicyUpdateError::PortNotAllowed)
+        );
+
+        let too_many: Vec<u16> = (3000..3000 + MAX_PROXY_ALLOWED_PORTS as u16 + 1).collect();
+        assert_eq!(
+            ProxyPolicy::from_update(true, "default", &too_many, 9777),
+            Err(ProxyPolicyUpdateError::TooManyPorts)
+        );
+
+        let dedup = ProxyPolicy::from_update(true, "default", &[3000, 3000, 5173], 9777)
+            .expect("duplicates are normalized");
+        assert_eq!(dedup.allowed_ports(), vec![3000, 5173]);
+    }
+
+    #[test]
+    fn proxy_policy_from_stored_falls_back_and_filters() {
+        let defaulted = ProxyPolicy::from_stored(None, None, None, 9777);
+        assert!(defaulted.enabled());
+        assert_eq!(defaulted.mode(), ProxyPortMode::Default);
+        assert!(defaulted.allowed_ports().is_empty());
+
+        // 脏 enabled 按开启；脏 mode 回退 default；非法端口逐条丢弃；70000 溢出 u16。
+        let filtered = ProxyPolicy::from_stored(
+            Some("yes"),
+            Some("strict"),
+            Some("[5173,3306,2999,5173,70000]"),
+            9777,
+        );
+        assert!(filtered.enabled());
+        assert_eq!(filtered.mode(), ProxyPortMode::Default);
+        assert_eq!(filtered.allowed_ports(), vec![5173]);
+
+        // 非 JSON 按空清单处理（严格模式下即全拒，安全侧）。
+        let broken = ProxyPolicy::from_stored(Some("0"), Some("allowlist"), Some("nope"), 9777);
+        assert!(!broken.enabled());
+        assert_eq!(broken.mode(), ProxyPortMode::Allowlist);
+        assert!(broken.allowed_ports().is_empty());
+    }
+
+    #[test]
+    fn proxy_policy_from_stored_caps_port_list() {
+        let list: Vec<String> =
+            (3000..3000 + MAX_PROXY_ALLOWED_PORTS + 10).map(|p| p.to_string()).collect();
+        let raw = format!("[{}]", list.join(","));
+        let policy = ProxyPolicy::from_stored(None, Some("allowlist"), Some(&raw), 20000);
+        assert_eq!(policy.allowed_ports().len(), MAX_PROXY_ALLOWED_PORTS);
+    }
+
     #[test]
     fn request_headers_strip_hop_by_hop() {
         let mut h = HeaderMap::new();
@@ -1527,9 +1882,88 @@ mod tests {
         assert_eq!(log.len(), MAX_TRACKED_PROXY_PORTS, "重新登记不得让表增长");
     }
 
+    #[test]
+    fn deny_log_dedups_by_port_and_reason_and_stays_bounded() {
+        let mut log = ProxyDenyLog::default();
+        assert!(log.insert((3000, ProxyDenyReason::Disabled)));
+        assert!(!log.insert((3000, ProxyDenyReason::Disabled)), "同端口同原因只记一次");
+        assert!(log.insert((3000, ProxyDenyReason::PortNotAllowed)), "不同原因分别记");
+        assert!(log.insert((3001, ProxyDenyReason::Disabled)));
+        assert_eq!(log.len(), 3);
+
+        let mut log = ProxyDenyLog::default();
+        for i in 0..(MAX_TRACKED_PROXY_DENIALS as u16 + 10) {
+            assert!(log.insert((3000 + i, ProxyDenyReason::Disabled)));
+        }
+        assert_eq!(log.len(), MAX_TRACKED_PROXY_DENIALS, "拒绝登记表须有界");
+    }
+
+    async fn proxy_audit_entries(
+        state: &AppState,
+        action: &str,
+    ) -> Vec<crate::api::audit::AuditEntry> {
+        crate::api::audit::list_recent(&state.db, 200)
+            .await
+            .expect("list audit")
+            .into_iter()
+            .filter(|e| e.action == action)
+            .collect()
+    }
+
+    /// 拒绝审计的三个边界：auth 关闭不记、认证态按 (端口, 原因) 去重、原因可区分。
+    #[tokio::test]
+    async fn dispatch_denied_audits_only_when_authenticated_and_dedups() {
+        use std::sync::atomic::Ordering;
+
+        let state = crate::test_utils::test_state().await;
+        *state.proxy.policy.write().unwrap() =
+            ProxyPolicy::from_update(true, "allowlist", &[], 9777).expect("empty allowlist");
+
+        // auth 关闭：403 但不写拒绝审计（无认证端点防灌量）。
+        let req = Request::builder().uri("/proxy/3000/").body(Body::empty()).unwrap();
+        let resp =
+            dispatch_proxy(state.clone(), 3000, "/proxy/3000/".parse().unwrap(), None, req).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(proxy_audit_entries(&state, "proxy_denied").await.is_empty());
+
+        // auth 开启：同一 (端口, 原因) 重复拒绝只记一条。
+        state.auth_enabled.store(true, Ordering::Relaxed);
+        for _ in 0..3 {
+            let req = Request::builder().uri("/proxy/3000/").body(Body::empty()).unwrap();
+            let resp =
+                dispatch_proxy(state.clone(), 3000, "/proxy/3000/".parse().unwrap(), None, req)
+                    .await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        }
+        let entries = proxy_audit_entries(&state, "proxy_denied").await;
+        assert_eq!(entries.len(), 1, "同端口同原因须去重");
+        assert_eq!(entries[0].target, "3000");
+        assert_eq!(entries[0].scope.as_deref(), Some("proxy_port:3000"));
+        assert!(entries[0].detail_json.as_deref().unwrap_or_default().contains("port_not_allowed"));
+
+        // 开关关闭是另一种原因：同一端口可再记一条，detail 标明 disabled。
+        *state.proxy.policy.write().unwrap() =
+            ProxyPolicy::from_update(false, "default", &[], 9777).expect("disabled");
+        let req = Request::builder().uri("/proxy/3000/").body(Body::empty()).unwrap();
+        let resp =
+            dispatch_proxy(state.clone(), 3000, "/proxy/3000/".parse().unwrap(), None, req).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let entries = proxy_audit_entries(&state, "proxy_denied").await;
+        assert_eq!(entries.len(), 2, "不同拒绝原因分别留痕");
+        assert!(
+            entries.iter().any(|e| e
+                .detail_json
+                .as_deref()
+                .unwrap_or_default()
+                .contains("disabled"))
+        );
+    }
+
     /// 调用点覆盖（子域名形态）：`proxy_host_mw` 必须把 `ConnectInfo` 与 `&HeaderMap`
     /// 真实传入 `verify_request`，且子域 Host 恒非回环字面量 → **永不**命中本地免密。
     /// 本测试在鉴权层就返回 401，不触达上游，故无需 mock 目标服务。
+    ///
+    /// 策略故意设为「关闭」：若顺序退化为「策略先于鉴权」会得到 403，本测试即失败。
     #[tokio::test]
     async fn proxy_host_mw_rejects_unauthenticated_subdomain_even_with_local_bypass_on() {
         use axum::middleware;
@@ -1540,6 +1974,8 @@ mod tests {
         state.auth_enabled.store(true, Ordering::Relaxed);
         state.local_auth_required.store(false, Ordering::Relaxed);
         state.proxy.base_host = Some("omniterm.lan".into());
+        *state.proxy.policy.write().unwrap() =
+            ProxyPolicy::from_update(false, "default", &[], 9777).expect("disabled");
 
         let app = Router::new()
             .route("/", any(|| async { "upstream" }))
@@ -1555,6 +1991,42 @@ mod tests {
 
         let resp = app.oneshot(req).await.expect("infallible");
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// 回归：子域名 WS 曾直连 `ws::relay`，绕过策略/首访审计/Origin 校验。
+    /// 关闭开关后必须 403（而非尝试建立上游连接）。
+    #[tokio::test]
+    async fn proxy_host_mw_applies_policy_to_websocket_upgrade() {
+        use axum::middleware;
+        use tower::ServiceExt;
+
+        let mut state = crate::test_utils::test_state().await;
+        state.proxy.base_host = Some("omniterm.lan".into());
+        *state.proxy.policy.write().unwrap() =
+            ProxyPolicy::from_update(false, "default", &[], 9777).expect("disabled");
+
+        let app = Router::new()
+            .route("/", any(|| async { "upstream" }))
+            .route_layer(middleware::from_fn_with_state(state.clone(), proxy_host_mw))
+            .with_state(state.clone());
+
+        let req = axum::http::Request::builder()
+            .uri("/")
+            .header("host", "3000.omniterm.lan")
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .extension(ConnectInfo(std::net::SocketAddr::new("127.0.0.1".parse().unwrap(), 40000)))
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.expect("infallible");
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(
+            proxy_audit_entries(&state, "proxy_access").await.is_empty(),
+            "被拒绝的 WS 握手不应写首访审计"
+        );
     }
 
     // ── 进程内集成测试（mock 目标服务 + proxy 全链路）──────────────

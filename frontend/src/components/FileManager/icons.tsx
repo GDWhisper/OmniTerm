@@ -342,3 +342,14 @@ export function IconListChecks(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+/** 全部展开：对角双向箭头（Sidebar「会话展开」toggle 的模式 1 态）。 */
+export function IconExpandAll(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <line x1="3.5" y1="12.5" x2="12.5" y2="3.5" />
+      <polyline points="8.5,3.5 12.5,3.5 12.5,7.5" />
+      <polyline points="7.5,12.5 3.5,12.5 3.5,8.5" />
+    </svg>
+  )
+}
+

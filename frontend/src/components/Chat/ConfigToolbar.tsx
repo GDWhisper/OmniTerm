@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
+import type { CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ConfigOption } from '../../stores/chatStore'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { READER_FONT } from '../../utils/fonts'
 import { useAppStore } from '../../stores/appStore'
 import { IconSettings, IconX } from '../FileManager/icons'
+import { useOverflowDistance } from '../../hooks/useOverflowDistance'
 
 const CATEGORY_LABELS: Record<string, string> = {
   mode: 'Mode',
@@ -25,6 +27,49 @@ const MOBILE_CONTROL_HEIGHT = 30
 
 /** 「高级」面板内容区最大高度：选项多时不向上顶穿聊天视口。 */
 const ADVANCED_MAX_HEIGHT = 320
+
+/** 移动端当前值右缘渐隐带宽度（px）：遮罩带与滚动行程都用它——滚到尽头时
+ *  尾字必须正好落在渐隐带内侧（清晰可读），两处不同宽就会把尾字吃掉。 */
+const VALUE_FADE_PX = 16
+
+/** 慢速轮播的移动速度（px/s）：模型名要能读完，不能一闪而过。 */
+const VALUE_MARQUEE_PX_PER_SECOND = 20
+
+/** 一轮（去程 + 回程 + 两端停留）的时长上下限（秒）。 */
+const VALUE_MARQUEE_MIN_SECONDS = 8
+const VALUE_MARQUEE_MAX_SECONDS = 30
+
+/** 关键帧里「单程移动」占整轮的比例（须与 index.css 的 config-value-marquee
+ *  关键帧一致）：整轮时长 = 行程时间 ÷ 该比例。 */
+const VALUE_MARQUEE_TRAVEL_FRACTION = 0.36
+
+/** 轮播一轮的时长（秒）：行程时间 ÷ 单程占比，再夹到上下限。
+ *
+ *  夹取的意义是两头兜底：溢出很少时不必一闪而过（太短看不清），溢出很多
+ *  时也不必慢到等不起——宁可偏离名义速度，也不能让人读不完或等不到。 */
+function marqueeDurationSeconds(distance: number): number {
+  const cycle = distance / VALUE_MARQUEE_PX_PER_SECOND / VALUE_MARQUEE_TRAVEL_FRACTION
+  return Math.min(
+    VALUE_MARQUEE_MAX_SECONDS,
+    Math.max(VALUE_MARQUEE_MIN_SECONDS, Math.round(cycle)),
+  )
+}
+
+/** 全角字符（CJK / 假名 / 全角符号）：同字号下约占两个半角宽。 */
+const FULL_WIDTH_CHARS = /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFF00-\uFF60]/g
+
+/** 行内项分配富余宽度的权重 = 当前值文案的视觉宽度（半角 1、全角 2）。
+ *
+ * 移动端行内项用 `flex: <权重> <shrink> auto`：basis 取自然宽（覆盖箭头、内边距
+ * 这类固定 chrome），富余部分再按文案长度分。于是长值（模型名）拿到大头，短值
+ * （思考等级 Off/High）只占自然宽——等分（旧 `1 1 0`）会让 3 个短词白占同样
+ * 一份，把模型名截成残句（360px 下只剩约 80px，思考等级却拿到同宽）。
+ */
+function inlineGrowWeight(option: ConfigOption): number {
+  const current = option.options.find((o) => o.value === option.currentValue)
+  const label = current?.name ?? option.currentValue
+  return Math.max(1, label.length + (label.match(FULL_WIDTH_CHARS)?.length ?? 0))
+}
 
 /** 按类别优先级把配置项切成「行内主位」与「收纳」两组。
  *
@@ -61,16 +106,25 @@ function ConfigDropdown({
   onSelect,
   readOnly = false,
   compact = false,
+  grow = 1,
+  shrink = 1,
 }: {
   option: ConfigOption
   onSelect: (configId: string, value: string) => void
   readOnly?: boolean
   /** 移动端紧凑态：去掉类别前缀、固定触摸目标高度、当前值超宽省略。 */
   compact?: boolean
+  /** 紧凑态下分配富余宽度的权重（见 inlineGrowWeight）。 */
+  grow?: number
+  /** 紧凑态下溢出时的收缩权重：只给最长值（见 ConfigToolbar 的 maxWeight）。 */
+  shrink?: number
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const ref = useRef<HTMLDivElement>(null)
+  // 当前值的视口（裁剪盒）与内容（完整文案）——移动端据此测溢出宽度。
+  const valueRef = useRef<HTMLSpanElement>(null)
+  const trackRef = useRef<HTMLSpanElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -100,6 +154,20 @@ function ConfigDropdown({
 
   const current = option.options.find((o) => o.value === option.currentValue)
   const label = CATEGORY_LABELS[option.category] ?? option.name
+  const valueText = current?.name ?? option.currentValue
+
+  // 溢出宽度：内容比视口多出多少像素（0 = 放得下，不该渐隐也不该滚动）。
+  const overflow = useOverflowDistance(valueRef, trackRef, valueText)
+  // 行程 = 溢出宽度 + 渐隐带：滚到尽头时内容右缘落在渐隐带内侧，尾字清晰。
+  const travel = overflow + VALUE_FADE_PX
+  const marqueeVars =
+    overflow > 0
+      ? ({
+          '--cfg-fade-width': `${VALUE_FADE_PX}px`,
+          '--cfg-marquee-distance': `${travel}px`,
+          '--cfg-marquee-duration': `${marqueeDurationSeconds(travel)}s`,
+        } as CSSProperties)
+      : undefined
 
   const filtered = option.options.filter((o) =>
     o.name.toLowerCase().includes(search.toLowerCase()),
@@ -111,12 +179,15 @@ function ConfigDropdown({
       ref={ref}
       style={{
         position: 'relative',
-        // 紧凑态等分剩余宽度（flex-basis 0）：三个行内项各拿一份，最长的值名
-        // 截断最多，短值（Ask/Off）不被牺牲。若用默认的按基准宽度比例收缩，
-        // 长模型名会把「Always Ask」这类短值一起拖到截断。
+        // 紧凑态按内容分配宽度：basis 用自然宽（覆盖箭头/内边距等固定 chrome），
+        // 富余部分按 `grow` 权重（= 当前值文案视觉宽度）分给各项，长值拿大头，
+        // 短值不再白占一份——见 inlineGrowWeight。shrink 只给最长值、其余为 0：
+        // 短值的 basis 恰是自然宽，哪怕收 1px 也会出省略号（「Always Ask」→
+        // 「Always A…」），溢出必须由长值独吞；它 min-width 0 可一路让到 0，
+        // 真实视口（≥320px）下不存在让无可让仍溢出的情形。
         // 注意 min-width 必须显式 0：弹性子项默认 min-width:auto，而当前值
         // nowrap，不给 0 按钮拒绝收缩、整行只能换行（实测 360px 换两行）。
-        flex: compact ? '1 1 0' : undefined,
+        flex: compact ? `${grow} ${shrink} auto` : undefined,
         minWidth: compact ? 0 : undefined,
       }}
     >
@@ -164,19 +235,36 @@ function ConfigDropdown({
             </span>
           )}
           {/* 常驻态只显当前值名：description（如模型消耗倍率）只在点开后的选项列表里
-              渲染——行内等分宽度时它永远最先被截成残句，反而挤短值名。 */}
-          <span
-            style={{
-              fontWeight: 600,
-              color: 'var(--text-primary)',
-              minWidth: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {current?.name ?? option.currentValue}
-          </span>
+              渲染——行内等分宽度时它永远最先被截成残句，反而挤短值名。
+              移动端窄栏里模型名会被硬截断（尾字直接消失），改成「右缘渐隐 +
+              慢速往返轮播」：渐隐替掉省略号，轮播让完整名字有机会被读完。
+              遮罩与关键帧见 index.css 的 .config-value*。 */}
+          {compact ? (
+            <span
+              ref={valueRef}
+              className={`config-value${overflow > 0 ? ' is-overflowing' : ''}${
+                open ? ' is-open' : ''
+              }`}
+              style={{ fontWeight: 600, color: 'var(--text-primary)', ...marqueeVars }}
+            >
+              <span ref={trackRef} className="config-value-track">
+                {valueText}
+              </span>
+            </span>
+          ) : (
+            <span
+              style={{
+                fontWeight: 600,
+                color: 'var(--text-primary)',
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {valueText}
+            </span>
+          )}
           <span style={{ fontSize: 9, color: 'var(--text-faint)', flexShrink: 0 }}>
             {open ? '▾' : '▴'}
           </span>
@@ -575,6 +663,9 @@ export function ConfigToolbar({
   // 非 权限/模型/思考 类别（模型参数、布尔开关、未知类别）在桌面端既不进行
   // 内、也不进面板——配置项直接消失，而移动端却能在「高级」里看到。
   const inlineOptions = isMobile ? primary : [...primary, ...advanced]
+  // 溢出时只让最长值先省略：shrink 权重集中给它，其余项为 0（短值收 1px 就会出省略号）。
+  const weights = inlineOptions.map(inlineGrowWeight)
+  const maxWeight = Math.max(...weights, 1)
 
   return (
     <div
@@ -594,13 +685,15 @@ export function ConfigToolbar({
         position: 'relative',
       }}
     >
-      {inlineOptions.map((opt) => (
+      {inlineOptions.map((opt, i) => (
         <ConfigDropdown
           key={opt.id}
           option={opt}
           onSelect={onSetConfigOption}
           readOnly={readOnly}
           compact={isMobile}
+          grow={weights[i]}
+          shrink={weights[i] === maxWeight ? weights[i] : 0}
         />
       ))}
       {showAdvanced && (

@@ -900,22 +900,19 @@ fn main() -> anyhow::Result<()> {
             // Password-verification master switch: DB is the source of truth;
             // `OMNITERM_AUTH_ENABLED` (CLI/env) overrides and writes back so the
             // UI and the running flag never diverge.
-            let mut auth_enabled =
-                sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
-                    .bind(auth::SETTING_AUTH_ENABLED)
-                    .fetch_optional(&db)
-                    .await?
-                    .map(|v| v == "1")
-                    .unwrap_or(false);
+            let mut auth_enabled = api::settings::get_setting(&db, auth::SETTING_AUTH_ENABLED)
+                .await?
+                .map(|v| v == "1")
+                .unwrap_or(false);
             if let Some(forced) = args.auth_enabled {
                 auth_enabled = forced;
-                sqlx::query(
-                    "INSERT INTO settings (key, value) VALUES (?, ?) \
-                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                api::settings::upsert_settings(
+                    &db,
+                    &[(
+                        auth::SETTING_AUTH_ENABLED,
+                        if forced { "1" } else { "0" }.to_string(),
+                    )],
                 )
-                .bind(auth::SETTING_AUTH_ENABLED)
-                .bind(if forced { "1" } else { "0" })
-                .execute(&db)
                 .await?;
             }
 
@@ -923,52 +920,37 @@ fn main() -> anyhow::Result<()> {
             // 不静默弱化既有部署的姿态）。仅字面量 "0" 关闭；"1" 之外的脏值按 true
             // fail-closed 处理。
             let local_auth_required =
-                sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
-                    .bind(auth::SETTING_LOCAL_AUTH_REQUIRED)
-                    .fetch_optional(&db)
+                api::settings::get_setting(&db, auth::SETTING_LOCAL_AUTH_REQUIRED)
                     .await?
                     .map(|v| v != "0")
                     .unwrap_or(true);
 
             // ACP 静默待命回收阈值（分钟）：DB 是唯一真相源，记录缺失/解析失败
             // 回退到 reaper 默认 300 秒（与硬编码时代行为完全一致）。
-            let acp_idle_recycle_secs = sqlx::query_scalar::<_, String>(
-                "SELECT value FROM settings WHERE key = 'acp_idle_recycle_min'",
-            )
-            .fetch_optional(&db)
-            .await?
-            .as_deref()
-            .map(|v| acp_idle_recycle_secs_from_setting(Some(v)))
-            .unwrap_or(acp::reaper::IDLE_RECYCLE_SECS);
+            let acp_idle_raw =
+                api::settings::get_setting(&db, "acp_idle_recycle_min").await?;
+            let acp_idle_recycle_secs = acp_idle_raw
+                .as_deref()
+                .map(|v| acp_idle_recycle_secs_from_setting(Some(v)))
+                .unwrap_or(acp::reaper::IDLE_RECYCLE_SECS);
             let acp_idle_recycle_secs = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
                 acp_idle_recycle_secs,
             ));
 
             // 权限请求超时配置：模式白名单校验（非法值回退 abort），分钟解析
             // 失败回退 30 分钟——DB 无配置时行为与硬编码时代完全一致。
+            let perm_mode_raw =
+                api::settings::get_setting(&db, "acp_perm_timeout_mode").await?;
+            let perm_secs_raw =
+                api::settings::get_setting(&db, "acp_perm_timeout_secs").await?;
+            let perm_legacy_min_raw =
+                api::settings::get_setting(&db, "acp_perm_timeout_min").await?;
             let acp_perm_timeout = std::sync::Arc::new(
                 acp::reaper::PermissionTimeoutConfig::new(
-                    permission_timeout_mode_from_setting(
-                        sqlx::query_scalar::<_, String>(
-                            "SELECT value FROM settings WHERE key = 'acp_perm_timeout_mode'",
-                        )
-                        .fetch_optional(&db)
-                        .await?
-                        .as_deref(),
-                    ),
+                    permission_timeout_mode_from_setting(perm_mode_raw.as_deref()),
                     permission_timeout_secs_from_settings(
-                        sqlx::query_scalar::<_, String>(
-                            "SELECT value FROM settings WHERE key = 'acp_perm_timeout_secs'",
-                        )
-                        .fetch_optional(&db)
-                        .await?
-                        .as_deref(),
-                        sqlx::query_scalar::<_, String>(
-                            "SELECT value FROM settings WHERE key = 'acp_perm_timeout_min'",
-                        )
-                        .fetch_optional(&db)
-                        .await?
-                        .as_deref(),
+                        perm_secs_raw.as_deref(),
+                        perm_legacy_min_raw.as_deref(),
                     ),
                 ),
             );
@@ -996,6 +978,10 @@ fn main() -> anyhow::Result<()> {
                 .build()
                 .context("failed to build proxy HTTP client")?;
 
+            // 代理安全策略（P4）：settings 表是启动期真相源，内存快照供热路径读取；
+            // 缺失/脏值回退安全默认，硬边界（范围/黑名单/自身端口）不可被配置放宽。
+            let proxy_policy = api::settings::load_proxy_policy(&db, args.port).await?;
+
             let state = AppState {
                 db,
                 jwt_secret,
@@ -1015,8 +1001,12 @@ fn main() -> anyhow::Result<()> {
                     self_port: args.port,
                     base_host: args.proxy_domain.clone(),
                     max_request_body: args.proxy_max_body.unwrap_or(proxy::MAX_REQUEST_BODY),
+                    policy: std::sync::Arc::new(std::sync::RwLock::new(proxy_policy)),
                     audited_ports: std::sync::Arc::new(std::sync::Mutex::new(
                         proxy::PortAuditLog::default(),
+                    )),
+                    audited_denials: std::sync::Arc::new(std::sync::Mutex::new(
+                        proxy::ProxyDenyLog::default(),
                     )),
                 },
                 max_upload_body: args.max_upload_body.unwrap_or(api::files::MAX_UPLOAD_BODY_DEFAULT),

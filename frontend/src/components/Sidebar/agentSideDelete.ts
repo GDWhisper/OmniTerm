@@ -1,6 +1,6 @@
 import type { TFunction } from 'i18next'
 import { api, type AgentSideDeleteResult, type Session } from '../../api/client'
-import type { ConfirmCheckbox } from '../Modal/ConfirmDialog'
+import type { ConfirmCheckbox } from '../../hooks/useConfirmCheckbox'
 
 /**
  * 「同时永久删除 agent 侧会话记录」勾选框的共享判据。

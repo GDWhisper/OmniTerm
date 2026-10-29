@@ -1,7 +1,8 @@
-use axum::extract::Query;
-use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
-use serde::Deserialize;
+use axum::extract::{ConnectInfo, Query, State};
+use axum::{Json, Router, http::StatusCode, routing::get};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 
 use crate::AppState;
@@ -37,6 +38,64 @@ pub fn routes() -> Router<AppState> {
             get(get_permission_timeout).put(set_permission_timeout),
         )
         .route("/settings/audit-log", get(get_audit_log))
+        .route("/settings/proxy", get(get_proxy_settings).put(set_proxy_settings))
+}
+
+/// 读取一个 `settings` key。缺失返回 `None`，DB 错误上抛。
+///
+/// 单一真源：settings 是纯 KV 表，读写 SQL 不得在各 handler / 启动路径各抄一份。
+pub(crate) async fn get_setting(
+    pool: &sqlx::SqlitePool,
+    key: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+        .bind(key)
+        .fetch_optional(pool)
+        .await
+}
+
+/// 在一个事务内批量 upsert settings key：全部成功才提交，避免多 key 配置半写入。
+pub(crate) async fn upsert_settings(
+    pool: &sqlx::SqlitePool,
+    pairs: &[(&str, String)],
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    for (key, value) in pairs {
+        sqlx::query(
+            "INSERT INTO settings (key, value) VALUES (?, ?) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await
+}
+
+/// 删除一个 `settings` key（不存在时成功返回）。
+pub(crate) async fn delete_setting(pool: &sqlx::SqlitePool, key: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM settings WHERE key = ?").bind(key).execute(pool).await?;
+    Ok(())
+}
+
+/// 从 settings 表加载代理策略（启动与 GET 的宽容解析入口）。
+///
+/// 缺失/脏值回退安全默认；硬边界（范围/黑名单/自身端口）始终由
+/// [`crate::proxy::ProxyPolicy::from_stored`] 再过滤一遍。
+pub(crate) async fn load_proxy_policy(
+    pool: &sqlx::SqlitePool,
+    self_port: u16,
+) -> Result<crate::proxy::ProxyPolicy, sqlx::Error> {
+    let enabled = get_setting(pool, crate::proxy::KEY_PROXY_ENABLED).await?;
+    let mode = get_setting(pool, crate::proxy::KEY_PROXY_MODE).await?;
+    let ports = get_setting(pool, crate::proxy::KEY_PROXY_ALLOWED_PORTS).await?;
+    Ok(crate::proxy::ProxyPolicy::from_stored(
+        enabled.as_deref(),
+        mode.as_deref(),
+        ports.as_deref(),
+        self_port,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -57,13 +116,9 @@ struct SetPermissionTimeoutRequest {
 async fn get_acp_idle_recycle(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let value: Option<String> = sqlx::query_scalar::<_, String>(&format!(
-        "SELECT value FROM settings WHERE key = '{}'",
-        KEY_ACP_IDLE_RECYCLE_MIN
-    ))
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let value = get_setting(&state.db, KEY_ACP_IDLE_RECYCLE_MIN)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let minutes = value
         .as_deref()
@@ -82,15 +137,9 @@ async fn set_acp_idle_recycle(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    sqlx::query(&format!(
-        "INSERT INTO settings (key, value) VALUES ('{}', ?) \
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        KEY_ACP_IDLE_RECYCLE_MIN
-    ))
-    .bind(req.minutes.to_string())
-    .execute(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    upsert_settings(&state.db, &[(KEY_ACP_IDLE_RECYCLE_MIN, req.minutes.to_string())])
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     state.acp_idle_recycle_secs.store(req.minutes * 60, Ordering::Relaxed);
     Ok(Json(json!({ "minutes": req.minutes })))
@@ -101,28 +150,12 @@ async fn set_acp_idle_recycle(
 async fn get_permission_timeout(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let mode_raw: Option<String> = sqlx::query_scalar::<_, String>(&format!(
-        "SELECT value FROM settings WHERE key = '{}'",
-        KEY_ACP_PERM_TIMEOUT_MODE
-    ))
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let secs_raw: Option<String> = sqlx::query_scalar::<_, String>(&format!(
-        "SELECT value FROM settings WHERE key = '{}'",
-        KEY_ACP_PERM_TIMEOUT_SECS
-    ))
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db_error = |_| StatusCode::INTERNAL_SERVER_ERROR;
+    let mode_raw = get_setting(&state.db, KEY_ACP_PERM_TIMEOUT_MODE).await.map_err(db_error)?;
+    let secs_raw = get_setting(&state.db, KEY_ACP_PERM_TIMEOUT_SECS).await.map_err(db_error)?;
     // 2026-10-01 前的分钟制记录兜底：秒制 key 缺失时才读（见 KEY_…_MIN_LEGACY）。
-    let legacy_min_raw: Option<String> = sqlx::query_scalar::<_, String>(&format!(
-        "SELECT value FROM settings WHERE key = '{}'",
-        KEY_ACP_PERM_TIMEOUT_MIN_LEGACY
-    ))
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let legacy_min_raw =
+        get_setting(&state.db, KEY_ACP_PERM_TIMEOUT_MIN_LEGACY).await.map_err(db_error)?;
 
     let mode =
         mode_raw.as_deref().and_then(PermissionTimeoutMode::from_str_opt).unwrap_or_default();
@@ -147,24 +180,18 @@ async fn set_permission_timeout(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    for (key, value) in [
-        (KEY_ACP_PERM_TIMEOUT_MODE, mode.as_str().to_string()),
-        (KEY_ACP_PERM_TIMEOUT_SECS, req.seconds.to_string()),
-    ] {
-        sqlx::query(&format!(
-            "INSERT INTO settings (key, value) VALUES ('{}', ?) \
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            key
-        ))
-        .bind(value)
-        .execute(&state.db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
+    upsert_settings(
+        &state.db,
+        &[
+            (KEY_ACP_PERM_TIMEOUT_MODE, mode.as_str().to_string()),
+            (KEY_ACP_PERM_TIMEOUT_SECS, req.seconds.to_string()),
+        ],
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     // 清理分钟制旧 key：避免 DB 里留下一个会误导排查的过期记录
     // （GET 的兼容回退只在新 key 缺失时生效，删掉后彻底闭环）。
-    sqlx::query(&format!("DELETE FROM settings WHERE key = '{}'", KEY_ACP_PERM_TIMEOUT_MIN_LEGACY))
-        .execute(&state.db)
+    delete_setting(&state.db, KEY_ACP_PERM_TIMEOUT_MIN_LEGACY)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -172,6 +199,95 @@ async fn set_permission_timeout(
     // 唤醒 reaper 立即按新配置重新评估未决请求（多跑一轮幂等，见 reaper 注释）。
     state.acp_perm_timeout.notify_perm_request();
     Ok(Json(json!({ "mode": mode.as_str(), "seconds": req.seconds })))
+}
+
+#[derive(Deserialize)]
+struct SetProxySettingsRequest {
+    enabled: bool,
+    /// 线格式白名单：default / allowlist（见 [`crate::proxy::ProxyPortMode`]）。
+    mode: String,
+    /// 严格模式放行清单；任何模式下都做硬边界校验与去重升序。
+    allowed_ports: Vec<u16>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProxySettingsResponse {
+    enabled: bool,
+    mode: &'static str,
+    allowed_ports: Vec<u16>,
+}
+
+fn proxy_settings_response(policy: &crate::proxy::ProxyPolicy) -> ProxySettingsResponse {
+    ProxySettingsResponse {
+        enabled: policy.enabled(),
+        mode: policy.mode().as_str(),
+        allowed_ports: policy.allowed_ports(),
+    }
+}
+
+/// 读取代理安全配置（返回内存中的**生效策略**；DB 只在启动与 PUT 时读写）。
+async fn get_proxy_settings(State(state): State<AppState>) -> Json<ProxySettingsResponse> {
+    let policy = state.proxy.policy.read().unwrap_or_else(|e| e.into_inner());
+    Json(proxy_settings_response(&policy))
+}
+
+/// 写入代理安全配置：严格校验 → 事务落库 → 替换内存快照 → 审计。
+///
+/// 与当前策略相同则视为 no-op：不写库、不审计（避免脚本重复 PUT 刷台账）。
+async fn set_proxy_settings(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(req): Json<SetProxySettingsRequest>,
+) -> Result<Json<ProxySettingsResponse>, StatusCode> {
+    let next = crate::proxy::ProxyPolicy::from_update(
+        req.enabled,
+        &req.mode,
+        &req.allowed_ports,
+        state.proxy.self_port,
+    )
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let current = {
+        let policy = state.proxy.policy.read().unwrap_or_else(|e| e.into_inner());
+        policy.clone()
+    };
+    if next == current {
+        return Ok(Json(proxy_settings_response(&next)));
+    }
+
+    let allowed_ports = next.allowed_ports();
+    let allowed_ports_json =
+        serde_json::to_string(&allowed_ports).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    upsert_settings(
+        &state.db,
+        &[
+            (crate::proxy::KEY_PROXY_ENABLED, if next.enabled() { "1" } else { "0" }.to_string()),
+            (crate::proxy::KEY_PROXY_MODE, next.mode().as_str().to_string()),
+            (crate::proxy::KEY_PROXY_ALLOWED_PORTS, allowed_ports_json),
+        ],
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    *state.proxy.policy.write().unwrap_or_else(|e| e.into_inner()) = next.clone();
+
+    let detail = json!({
+        "enabled": next.enabled(),
+        "mode": next.mode().as_str(),
+        "allowed_ports": allowed_ports,
+    })
+    .to_string();
+    let ctx = crate::api::audit::AuditContext::from_ip(Some(addr.ip()), None);
+    crate::api::audit::record(
+        &state.db,
+        &ctx,
+        crate::api::audit::AuditAction::ProxySettingsChanged,
+        "proxy",
+        Some(&detail),
+    )
+    .await;
+
+    Ok(Json(proxy_settings_response(&next)))
 }
 
 /// 读取安全审计日志（只读最近 N 条，新→旧）。
@@ -464,5 +580,169 @@ mod tests {
         .expect("put ok");
         assert_eq!(db_value(&state.db).await.as_deref(), Some("30"));
         assert_eq!(state.acp_idle_recycle_secs.load(Ordering::Relaxed), 1800);
+    }
+
+    // ── 代理安全配置（P4） ──
+
+    fn conn() -> ConnectInfo<SocketAddr> {
+        ConnectInfo(SocketAddr::new("127.0.0.1".parse().unwrap(), 50000))
+    }
+
+    async fn proxy_setting(db: &sqlx::SqlitePool, key: &str) -> Option<String> {
+        get_setting(db, key).await.expect("query proxy setting")
+    }
+
+    async fn proxy_audit_count(state: &AppState, action: &str) -> usize {
+        crate::api::audit::list_recent(&state.db, 200)
+            .await
+            .expect("list audit")
+            .into_iter()
+            .filter(|e| e.action == action)
+            .count()
+    }
+
+    #[tokio::test]
+    async fn proxy_get_returns_defaults() {
+        let state = test_state().await;
+        let res = get_proxy_settings(State(state)).await;
+        assert_eq!(
+            serde_json::to_value(res.0).expect("serialize"),
+            json!({ "enabled": true, "mode": "default", "allowed_ports": [] })
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_put_persists_updates_memory_and_audits() {
+        let state = test_state().await;
+        let res = set_proxy_settings(
+            State(state.clone()),
+            conn(),
+            Json(SetProxySettingsRequest {
+                enabled: true,
+                mode: "allowlist".into(),
+                allowed_ports: vec![5173, 3000, 3000],
+            }),
+        )
+        .await
+        .expect("put ok");
+        assert_eq!(
+            serde_json::to_value(res.0).expect("serialize"),
+            json!({ "enabled": true, "mode": "allowlist", "allowed_ports": [3000, 5173] })
+        );
+        assert_eq!(
+            proxy_setting(&state.db, crate::proxy::KEY_PROXY_ENABLED).await.as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            proxy_setting(&state.db, crate::proxy::KEY_PROXY_MODE).await.as_deref(),
+            Some("allowlist")
+        );
+        assert_eq!(
+            proxy_setting(&state.db, crate::proxy::KEY_PROXY_ALLOWED_PORTS).await.as_deref(),
+            Some("[3000,5173]")
+        );
+
+        let policy = state.proxy.policy.read().unwrap().clone();
+        assert_eq!(policy.decide(3000, 9777), crate::proxy::ProxyPolicyDecision::Allowed);
+        assert_eq!(policy.decide(4000, 9777), crate::proxy::ProxyPolicyDecision::PortDenied);
+
+        let entries = crate::api::audit::list_recent(&state.db, 200).await.expect("audit");
+        let changed: Vec<_> =
+            entries.iter().filter(|e| e.action == "proxy_settings_changed").collect();
+        assert_eq!(changed.len(), 1, "配置变更须留痕一条");
+        assert_eq!(changed[0].target, "proxy");
+        assert!(
+            changed[0]
+                .detail_json
+                .as_deref()
+                .unwrap_or_default()
+                .contains("\"mode\":\"allowlist\"")
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_put_noop_does_not_audit_again() {
+        let state = test_state().await;
+        let request = || SetProxySettingsRequest {
+            enabled: true,
+            mode: "allowlist".into(),
+            allowed_ports: vec![3000],
+        };
+        let _ = set_proxy_settings(State(state.clone()), conn(), Json(request()))
+            .await
+            .expect("first put");
+        let _ = set_proxy_settings(State(state.clone()), conn(), Json(request()))
+            .await
+            .expect("noop put");
+        assert_eq!(proxy_audit_count(&state, "proxy_settings_changed").await, 1);
+    }
+
+    #[tokio::test]
+    async fn proxy_put_validation_keeps_state_unchanged() {
+        let state = test_state().await;
+        let _ = set_proxy_settings(
+            State(state.clone()),
+            conn(),
+            Json(SetProxySettingsRequest {
+                enabled: true,
+                mode: "allowlist".into(),
+                allowed_ports: vec![3000],
+            }),
+        )
+        .await
+        .expect("seed put ok");
+
+        let too_many: Vec<u16> =
+            (3000..3000 + crate::proxy::MAX_PROXY_ALLOWED_PORTS as u16 + 1).collect();
+        let bad_cases = vec![
+            ("strict", vec![]),
+            ("default", vec![2999]),
+            ("default", vec![3306]),
+            ("default", vec![9777]),
+            ("default", too_many),
+        ];
+        for (mode, ports) in bad_cases {
+            let err = set_proxy_settings(
+                State(state.clone()),
+                conn(),
+                Json(SetProxySettingsRequest {
+                    enabled: false,
+                    mode: mode.into(),
+                    allowed_ports: ports,
+                }),
+            )
+            .await
+            .expect_err("invalid policy must be rejected");
+            assert_eq!(err, StatusCode::BAD_REQUEST, "mode={mode}");
+        }
+
+        assert_eq!(
+            proxy_setting(&state.db, crate::proxy::KEY_PROXY_MODE).await.as_deref(),
+            Some("allowlist")
+        );
+        let policy = state.proxy.policy.read().unwrap().clone();
+        assert!(policy.enabled(), "非法 PUT 不得关闭代理");
+        assert_eq!(policy.decide(3000, 9777), crate::proxy::ProxyPolicyDecision::Allowed);
+        assert_eq!(proxy_audit_count(&state, "proxy_settings_changed").await, 1);
+    }
+
+    #[tokio::test]
+    async fn load_proxy_policy_reads_stored_values() {
+        let state = test_state().await;
+        upsert_settings(
+            &state.db,
+            &[
+                (crate::proxy::KEY_PROXY_ENABLED, "0".into()),
+                (crate::proxy::KEY_PROXY_MODE, "allowlist".into()),
+                (crate::proxy::KEY_PROXY_ALLOWED_PORTS, "[5173,3306]".into()),
+            ],
+        )
+        .await
+        .expect("seed settings");
+
+        let policy = load_proxy_policy(&state.db, 9777).await.expect("load policy");
+        assert!(!policy.enabled());
+        assert_eq!(policy.mode(), crate::proxy::ProxyPortMode::Allowlist);
+        assert_eq!(policy.allowed_ports(), vec![5173], "黑名单端口在加载时丢弃");
     }
 }

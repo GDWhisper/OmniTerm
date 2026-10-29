@@ -1,8 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { rewriteLocalUrl, setProxyDomain } from './proxyUrl'
+import { rewriteLocalUrl, setProxyDomain, setProxyEnabled } from './proxyUrl'
 
-// proxyDomain 是模块级状态，测试间必须重置，避免子域名配置污染后续用例。
-afterEach(() => setProxyDomain(null))
+// proxyDomain / proxyEnabled 是模块级状态，测试间必须重置，避免互相污染。
+afterEach(() => {
+  setProxyDomain(null)
+  setProxyEnabled(true)
+})
 
 describe('rewriteLocalUrl（路径前缀，默认）', () => {
   it('重写 http://localhost:port 为 /proxy/{port}/', () => {
@@ -40,6 +43,26 @@ describe('rewriteLocalUrl（路径前缀，默认）', () => {
   it('空字符串返回 null', () => {
     expect(rewriteLocalUrl('')).toBeNull()
     expect(rewriteLocalUrl('   ')).toBeNull()
+  })
+})
+
+describe('rewriteLocalUrl（代理全局关闭，P4）', () => {
+  it('关闭后任何本机 URL 都不再重写', () => {
+    setProxyEnabled(false)
+    expect(rewriteLocalUrl('http://localhost:3000')).toBeNull()
+    expect(rewriteLocalUrl('localhost:5173/foo')).toBeNull()
+  })
+
+  it('重新开启后恢复重写', () => {
+    setProxyEnabled(false)
+    setProxyEnabled(true)
+    expect(rewriteLocalUrl('http://localhost:3000')).toBe('/proxy/3000/')
+  })
+
+  it('关闭优先于子域名形态', () => {
+    setProxyDomain('omniterm.lan')
+    setProxyEnabled(false)
+    expect(rewriteLocalUrl('http://localhost:3000')).toBeNull()
   })
 })
 

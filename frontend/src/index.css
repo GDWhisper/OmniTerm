@@ -2295,6 +2295,49 @@ body.parchment-texture {
   color: var(--danger);
 }
 
+/* ── 锚定确认气泡（PopoverConfirm，ui-style-guide §6.3.1）──────────
+   单条目标的二次确认：贴着触发按钮弹出，无遮罩。本体复用 .pixel-float
+   （2px 边框 + 4px 硬阴影）；本类只管布局与内部排版。
+   z-index 200 = 交互浮层档（与上下文菜单同层；两者不会同时打开）。 */
+.popover-confirm {
+  position: fixed;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: var(--reader-font);
+  outline: none;
+}
+.popover-confirm-content {
+  padding: 12px 14px 0;
+}
+.popover-confirm-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.popover-confirm-message {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.popover-confirm-checkbox {
+  margin-top: 10px;
+}
+.popover-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px 12px;
+}
+
 /* Interactive elements that keep their own border/colors but need the
    unified hard shadow + press displacement (see ui-style-guide §6). */
 .pixel-press {
@@ -2488,6 +2531,71 @@ input[type="range"]:active::-webkit-slider-thumb {
 }
 .chat-msg-row.chat-msg-row-flash {
   animation: chat-msg-row-flash 1.5s ease-out forwards;
+}
+
+/* ── 聊天配置栏当前值：右缘渐隐 + 慢速往返轮播 ───────────────────────
+   移动端窄栏里模型名被硬截断（尾字直接消失，只剩半句）。这里改成两条：
+   ① 右缘用 mask 渐隐，替掉省略号的硬边——省略号吃掉字符宽度还暴露「被截了」；
+   ② 内容慢速往返滚动，让完整名字有机会被读完。
+   渐隐带宽度与滚动行程用同一个值（--cfg-fade-width）：行程 = 溢出宽度 +
+   渐隐带，滚到尽头时内容右缘正好落在渐隐带内侧，尾字仍清晰可读。
+   往返而非单向循环：单向要把文案复制一份才能接上，接缝处会读成「两个模型」。 */
+.config-value {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
+}
+
+.config-value-track {
+  display: inline-block;
+  width: max-content;
+  white-space: nowrap;
+}
+
+/* 只在实际溢出时挂遮罩：放得下的值不该被吃掉最后一段。 */
+.config-value.is-overflowing {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - var(--cfg-fade-width, 16px)),
+    transparent
+  );
+  mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - var(--cfg-fade-width, 16px)),
+    transparent
+  );
+}
+
+.config-value.is-overflowing .config-value-track {
+  animation: config-value-marquee var(--cfg-marquee-duration, 8s) linear infinite;
+}
+
+/* 下拉展开时暂停滚动：选项列表里已能看到完整名字，行内再滚动只会添乱。 */
+.config-value.is-overflowing.is-open .config-value-track {
+  animation-play-state: paused;
+}
+
+/* 关键时刻表（须与 ConfigToolbar 的 VALUE_MARQUEE_TRAVEL_FRACTION 一致）：
+   0→6% 起点停留 / 6→42% 去程（36%）/ 42→62% 尽头停留（20%，够读完尾字）/
+   62→98% 回程（36%）/ 98→100% 回到起点。整轮时长由 TS 按速度算出。 */
+@keyframes config-value-marquee {
+  0%, 6% {
+    transform: translateX(0);
+  }
+  42%, 62% {
+    transform: translateX(calc(-1 * var(--cfg-marquee-distance, 0px)));
+  }
+  98%, 100% {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .config-value.is-overflowing .config-value-track {
+    animation: none;
+  }
 }
 
 /* ── 聊天面板顶部错误条 ────────────────────────────────────────
@@ -2807,6 +2915,42 @@ input[type="range"]:active::-webkit-slider-thumb {
 }
 .chat-block-copy-btn:hover {
   color: var(--text-secondary);
+}
+
+/* 围栏代码块的复制角标。代码块底色恒为 oneDark 深色（与主题明暗无关），故
+   配色用固定的浅色而非主题变量。角标只在 hover / 键盘聚焦时亮出，避免常驻
+   遮挡代码；触屏无 hover，常显半透明（否则移动端永远拿不到复制入口）。 */
+.md-code-block {
+  position: relative;
+  margin: 8px 0;
+}
+.md-code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 0;
+  background: rgba(20, 22, 26, 0.72);
+  color: rgba(255, 255, 255, 0.62);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+.md-code-block:hover .md-code-copy-btn,
+.md-code-copy-btn:focus-visible {
+  opacity: 1;
+}
+.md-code-copy-btn:hover {
+  color: rgba(255, 255, 255, 0.95);
+}
+@media (hover: none) {
+  .md-code-copy-btn {
+    opacity: 0.6;
+  }
 }
 
 /* ────────────────────────────────────────────────────────────────────
