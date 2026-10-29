@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
+import type { CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ConfigOption } from '../../stores/chatStore'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { READER_FONT } from '../../utils/fonts'
 import { useAppStore } from '../../stores/appStore'
 import { IconSettings, IconX } from '../FileManager/icons'
+import { useOverflowDistance } from '../../hooks/useOverflowDistance'
 
 const CATEGORY_LABELS: Record<string, string> = {
   mode: 'Mode',
@@ -25,6 +27,33 @@ const MOBILE_CONTROL_HEIGHT = 30
 
 /** 「高级」面板内容区最大高度：选项多时不向上顶穿聊天视口。 */
 const ADVANCED_MAX_HEIGHT = 320
+
+/** 移动端当前值右缘渐隐带宽度（px）：遮罩带与滚动行程都用它——滚到尽头时
+ *  尾字必须正好落在渐隐带内侧（清晰可读），两处不同宽就会把尾字吃掉。 */
+const VALUE_FADE_PX = 16
+
+/** 慢速轮播的移动速度（px/s）：模型名要能读完，不能一闪而过。 */
+const VALUE_MARQUEE_PX_PER_SECOND = 20
+
+/** 一轮（去程 + 回程 + 两端停留）的时长上下限（秒）。 */
+const VALUE_MARQUEE_MIN_SECONDS = 8
+const VALUE_MARQUEE_MAX_SECONDS = 30
+
+/** 关键帧里「单程移动」占整轮的比例（须与 index.css 的 config-value-marquee
+ *  关键帧一致）：整轮时长 = 行程时间 ÷ 该比例。 */
+const VALUE_MARQUEE_TRAVEL_FRACTION = 0.36
+
+/** 轮播一轮的时长（秒）：行程时间 ÷ 单程占比，再夹到上下限。
+ *
+ *  夹取的意义是两头兜底：溢出很少时不必一闪而过（太短看不清），溢出很多
+ *  时也不必慢到等不起——宁可偏离名义速度，也不能让人读不完或等不到。 */
+function marqueeDurationSeconds(distance: number): number {
+  const cycle = distance / VALUE_MARQUEE_PX_PER_SECOND / VALUE_MARQUEE_TRAVEL_FRACTION
+  return Math.min(
+    VALUE_MARQUEE_MAX_SECONDS,
+    Math.max(VALUE_MARQUEE_MIN_SECONDS, Math.round(cycle)),
+  )
+}
 
 /** 全角字符（CJK / 假名 / 全角符号）：同字号下约占两个半角宽。 */
 const FULL_WIDTH_CHARS = /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFF00-\uFF60]/g
@@ -93,6 +122,9 @@ function ConfigDropdown({
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const ref = useRef<HTMLDivElement>(null)
+  // 当前值的视口（裁剪盒）与内容（完整文案）——移动端据此测溢出宽度。
+  const valueRef = useRef<HTMLSpanElement>(null)
+  const trackRef = useRef<HTMLSpanElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -122,6 +154,20 @@ function ConfigDropdown({
 
   const current = option.options.find((o) => o.value === option.currentValue)
   const label = CATEGORY_LABELS[option.category] ?? option.name
+  const valueText = current?.name ?? option.currentValue
+
+  // 溢出宽度：内容比视口多出多少像素（0 = 放得下，不该渐隐也不该滚动）。
+  const overflow = useOverflowDistance(valueRef, trackRef, valueText)
+  // 行程 = 溢出宽度 + 渐隐带：滚到尽头时内容右缘落在渐隐带内侧，尾字清晰。
+  const travel = overflow + VALUE_FADE_PX
+  const marqueeVars =
+    overflow > 0
+      ? ({
+          '--cfg-fade-width': `${VALUE_FADE_PX}px`,
+          '--cfg-marquee-distance': `${travel}px`,
+          '--cfg-marquee-duration': `${marqueeDurationSeconds(travel)}s`,
+        } as CSSProperties)
+      : undefined
 
   const filtered = option.options.filter((o) =>
     o.name.toLowerCase().includes(search.toLowerCase()),
@@ -189,19 +235,36 @@ function ConfigDropdown({
             </span>
           )}
           {/* 常驻态只显当前值名：description（如模型消耗倍率）只在点开后的选项列表里
-              渲染——行内等分宽度时它永远最先被截成残句，反而挤短值名。 */}
-          <span
-            style={{
-              fontWeight: 600,
-              color: 'var(--text-primary)',
-              minWidth: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {current?.name ?? option.currentValue}
-          </span>
+              渲染——行内等分宽度时它永远最先被截成残句，反而挤短值名。
+              移动端窄栏里模型名会被硬截断（尾字直接消失），改成「右缘渐隐 +
+              慢速往返轮播」：渐隐替掉省略号，轮播让完整名字有机会被读完。
+              遮罩与关键帧见 index.css 的 .config-value*。 */}
+          {compact ? (
+            <span
+              ref={valueRef}
+              className={`config-value${overflow > 0 ? ' is-overflowing' : ''}${
+                open ? ' is-open' : ''
+              }`}
+              style={{ fontWeight: 600, color: 'var(--text-primary)', ...marqueeVars }}
+            >
+              <span ref={trackRef} className="config-value-track">
+                {valueText}
+              </span>
+            </span>
+          ) : (
+            <span
+              style={{
+                fontWeight: 600,
+                color: 'var(--text-primary)',
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {valueText}
+            </span>
+          )}
           <span style={{ fontSize: 9, color: 'var(--text-faint)', flexShrink: 0 }}>
             {open ? '▾' : '▴'}
           </span>

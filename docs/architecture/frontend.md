@@ -28,6 +28,7 @@ src/
 │   ├── useSessionExport.ts # 会话导出 Markdown 的编排（取数→转换→拼装→下载→toast；入口在侧栏会话右键菜单，仅 ACP 会话）
 │   ├── useConfirmCheckbox.ts # 确认层复选框的类型与勾选状态单一真源（ConfirmDialog 与 PopoverConfirm 共用；「记住上次选择」只由 defaultChecked 驱动）
 │   ├── useStickScroll.ts # 流式内容滚动锚定（stick-to-bottom）：默认钉底、上翻解除、滚回恢复（ChatMessage thinking/工具块）
+│   ├── useOverflowDistance.ts # 溢出宽度测量（内容宽 - 视口宽，**不用 scrollWidth**：transform 平移后的溢出会被算进去导致距离自激）：侧栏会话标题渐隐+hover 滚动（§7.4.1）与移动端配置栏当前值渐隐+慢速轮播（§7.13）共用同一实现；±1px 抖动不重渲染
 │   └── useTerminalEngine.ts # 默认终端引擎× 宿主复用器可用性 → 实际引擎（「在此打开终端」等无点选环节的入口共用，勿各自读 multiplexerAvailable）
 ├── locales/
 │   ├── en/translation.json

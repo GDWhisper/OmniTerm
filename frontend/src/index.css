@@ -2533,6 +2533,71 @@ input[type="range"]:active::-webkit-slider-thumb {
   animation: chat-msg-row-flash 1.5s ease-out forwards;
 }
 
+/* ── 聊天配置栏当前值：右缘渐隐 + 慢速往返轮播 ───────────────────────
+   移动端窄栏里模型名被硬截断（尾字直接消失，只剩半句）。这里改成两条：
+   ① 右缘用 mask 渐隐，替掉省略号的硬边——省略号吃掉字符宽度还暴露「被截了」；
+   ② 内容慢速往返滚动，让完整名字有机会被读完。
+   渐隐带宽度与滚动行程用同一个值（--cfg-fade-width）：行程 = 溢出宽度 +
+   渐隐带，滚到尽头时内容右缘正好落在渐隐带内侧，尾字仍清晰可读。
+   往返而非单向循环：单向要把文案复制一份才能接上，接缝处会读成「两个模型」。 */
+.config-value {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
+}
+
+.config-value-track {
+  display: inline-block;
+  width: max-content;
+  white-space: nowrap;
+}
+
+/* 只在实际溢出时挂遮罩：放得下的值不该被吃掉最后一段。 */
+.config-value.is-overflowing {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - var(--cfg-fade-width, 16px)),
+    transparent
+  );
+  mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - var(--cfg-fade-width, 16px)),
+    transparent
+  );
+}
+
+.config-value.is-overflowing .config-value-track {
+  animation: config-value-marquee var(--cfg-marquee-duration, 8s) linear infinite;
+}
+
+/* 下拉展开时暂停滚动：选项列表里已能看到完整名字，行内再滚动只会添乱。 */
+.config-value.is-overflowing.is-open .config-value-track {
+  animation-play-state: paused;
+}
+
+/* 关键时刻表（须与 ConfigToolbar 的 VALUE_MARQUEE_TRAVEL_FRACTION 一致）：
+   0→6% 起点停留 / 6→42% 去程（36%）/ 42→62% 尽头停留（20%，够读完尾字）/
+   62→98% 回程（36%）/ 98→100% 回到起点。整轮时长由 TS 按速度算出。 */
+@keyframes config-value-marquee {
+  0%, 6% {
+    transform: translateX(0);
+  }
+  42%, 62% {
+    transform: translateX(calc(-1 * var(--cfg-marquee-distance, 0px)));
+  }
+  98%, 100% {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .config-value.is-overflowing .config-value-track {
+    animation: none;
+  }
+}
+
 /* ── 聊天面板顶部错误条 ────────────────────────────────────────
    一次性错误（发送失败 / 配置项设置失败 / 帧错误）在会话内没有天然收尾事件，
    必须给显式关闭出口，否则会一直占住消息区上方直到用户下一次发送。 */

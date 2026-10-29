@@ -419,6 +419,87 @@ describe('ConfigToolbar option descriptions', () => {
   })
 })
 
+// ── 移动端当前值溢出：右缘渐隐 + 慢速往返轮播 ─────────────────────────
+// 窄栏里模型名被硬截断（尾字直接消失，只剩半句）。改为「右缘渐隐 + 慢速往返
+// 轮播」：渐隐吃掉硬边，轮播让完整名字有机会被读完。jsdom 不做布局，溢出
+// 判据靠桩几何（内容宽 - 视口宽，与 SessionRow 同一实现）。
+
+describe('ConfigToolbar mobile value marquee', () => {
+  let resizeCallback: ResizeObserverCallback | undefined
+
+  beforeEach(() => {
+    class SpyResizeObserver {
+      constructor(cb: ResizeObserverCallback) {
+        resizeCallback = cb
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', SpyResizeObserver as unknown as typeof ResizeObserver)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /** 桩出「内容比视口宽 93px」的几何并触发一次测量。 */
+  function stubOverflow() {
+    const viewport = container.querySelector('.config-value') as HTMLElement
+    const track = container.querySelector('.config-value-track') as HTMLElement
+    Object.defineProperty(track, 'offsetWidth', { configurable: true, value: 234 })
+    Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 141 })
+    act(() => {
+      resizeCallback?.([], null as unknown as ResizeObserver)
+    })
+    return viewport
+  }
+
+  it('挂渐隐 class 并写入轮播距离与时长（行程 = 溢出宽度 + 渐隐带）', () => {
+    render({ mobile: true, options: [MODEL_OPTION] })
+
+    const viewport = stubOverflow()
+
+    expect(viewport.classList.contains('is-overflowing')).toBe(true)
+    // 行程 = 溢出 93 + 渐隐带 16 = 109px：滚到尽头时尾字落在渐隐带内侧
+    expect(viewport.style.getPropertyValue('--cfg-marquee-distance')).toBe('109px')
+    expect(viewport.style.getPropertyValue('--cfg-fade-width')).toBe('16px')
+    // 时长 = 行程 ÷ 速度 ÷ 单程占比 = 109 ÷ 20 ÷ 0.36 ≈ 15s
+    expect(viewport.style.getPropertyValue('--cfg-marquee-duration')).toBe('15s')
+  })
+
+  it('内容放得下时不挂渐隐 class、也不写轮播变量', () => {
+    render({ mobile: true, options: [MODEL_OPTION] })
+
+    const viewport = container.querySelector('.config-value') as HTMLElement
+    expect(viewport.classList.contains('is-overflowing')).toBe(false)
+    expect(viewport.style.getPropertyValue('--cfg-marquee-distance')).toBe('')
+    expect(viewport.style.getPropertyValue('--cfg-marquee-duration')).toBe('')
+  })
+
+  it('下拉展开时挂 is-open（暂停轮播，选项列表里已能看到完整名字）', () => {
+    render({ mobile: true, options: [MODEL_OPTION] })
+
+    act(() => {
+      findButton('model-0')!.click()
+    })
+
+    const viewport = container.querySelector('.config-value') as HTMLElement
+    expect(viewport.classList.contains('is-open')).toBe(true)
+  })
+
+  it('桌面端保持省略号截断（不引入轮播结构）', () => {
+    render({ mobile: false, options: [MODEL_OPTION] })
+
+    expect(container.querySelector('.config-value'), 'desktop uses no marquee markup').toBeNull()
+    const trigger = findButton('Model:') as HTMLButtonElement
+    const content = trigger.firstElementChild as HTMLElement
+    // 内容块内第二个 span 是当前值（第一个是「Model:」前缀）
+    const value = content.children[1] as HTMLElement
+    expect(value.style.textOverflow).toBe('ellipsis')
+  })
+})
+
 // ── 触发器内容居中 / 右截断契约 ────────────────────────────────────────
 // 期望行为：空间充足（内容窄于按钮）时文字居中；不够时保持左对齐右截断。
 // 实现是纯 CSS 表达（内层内容块 max-content + auto 外边距 + max-width 上限），

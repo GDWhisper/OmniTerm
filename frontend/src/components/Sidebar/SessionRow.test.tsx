@@ -285,7 +285,9 @@ describe('SessionRow 交互', () => {
 
     const row = renderRow(baseProps())
     const title = row.querySelector('.session-name') as HTMLElement
-    Object.defineProperty(title, 'scrollWidth', { configurable: true, value: 220 })
+    const titleText = row.querySelector('.session-name-text') as HTMLElement
+    // 溢出判据 = 内容宽 - 视口宽（共用 useOverflowDistance）
+    Object.defineProperty(titleText, 'offsetWidth', { configurable: true, value: 220 })
     Object.defineProperty(title, 'clientWidth', { configurable: true, value: 100 })
 
     act(() => {

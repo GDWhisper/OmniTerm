@@ -56,6 +56,7 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- [frontend] 移动端底部配置栏的模型按钮不再「右截断 + ……」：溢出时右缘改为渐隐（不再显示省略号，硬边被吃掉），当前值以 20px/s 慢速往返轮播，完整模型名有机会被读完；下拉展开时暂停滚动（选项列表里已能看到完整名字），系统开启「减少动态效果」时只保留渐隐（`frontend/src/components/Chat/ConfigToolbar.tsx`、`frontend/src/index.css`） (2026-10-28 20:51)
 - [frontend] 聊天气泡不再挂块级复制角标（与消息动作栏的「复制 / 复制为 Markdown」重复，且会压住代码块自己的复制按钮）；思考块与工具卡仍各自保留（复制内容不同） (2026-10-28 09:18)
 
 - [frontend] 移动端 ACP 配置栏（权限模式 / 模型 / 思考等级）行内宽度由等分改为按当前值文案的视觉宽度自适应：富余空间优先给长值（模型名不再被等分截成残句），短值只占自然宽不再白占一份；整行确实装不下时由最长值独自省略，短值保持完整可读（`frontend/src/components/Chat/ConfigToolbar.tsx`） (2026-10-27 07:29)

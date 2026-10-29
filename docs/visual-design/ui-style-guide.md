@@ -795,6 +795,32 @@ ACP 消息流里的 thought 块：一行可点标题 + 展开区。**思考内�
 | 「回到最新消息」 | `.panel-title-bar-text-btn`（10px 字，木底浅字小按钮）：定位页替换窗口期间出现——更新的消息不在窗口内，没有出口用户会卡在一段历史里 |
 | 定位闪烁 | 用户消息打在**气泡**上（`.chat-msg-flash`，既有机制）；助手消息没有单一气泡外壳（正文由多个 block 组成），ring 打在**行**上（`.chat-msg-row-flash`，不带气泡硬投影）。「指向某条消息」仍只有 `highlightedMessageId` 一条通道 |
 
+### 7.13 聊天配置栏当前值（移动端右缘渐隐 + 慢速轮播）
+
+聊天面板底部配置栏（`ConfigToolbar.tsx`）在移动端是单行紧凑态：权限模式 / 模型 /
+思考等级三项按当前值文案长度分配宽度，其余收进「高级」面板。**模型名往往放不下**
+——此前是 `text-overflow: ellipsis` 硬截断，尾字直接消失、只剩半句。
+
+紧凑态当前值改为**右缘渐隐 + 慢速往返轮播**（桌面端维持省略号截断）：
+
+| 元素 | 规格 |
+|---|---|
+| 视口 `.config-value` | `flex:0 1 auto; min-width:0; overflow:hidden; white-space:nowrap`，**不用省略号**；内层 `.config-value-track` 为 `inline-block` 的内容层（`width:max-content`，不换行） |
+| 右缘渐隐 | 仅在实际溢出时挂 `.is-overflowing`：`mask-image: linear-gradient(to right, #000 calc(100% - var(--cfg-fade-width)), transparent)`，渐隐带 16px。短值不挂 mask，最后一段文字不会被误吃掉 |
+| 轮播 | `.config-value-track` 持续往返滚动（`translateX(0)` → `-行程` → `0`），关键帧 `config-value-marquee`：起点停 6% / 去程 36% / 尽头停 20% / 回程 36% / 回到起点 |
+| 行程与时长 | 行程 = 溢出宽度 + 渐隐带（16px）——滚到尽头时内容右缘落在渐隐带**内侧**，尾字仍清晰；速度 20px/s，整轮时长 = 行程 ÷ 20 ÷ 0.36，钳制在 8–30s |
+| 暂停 | 下拉展开时挂 `.is-open`，`animation-play-state: paused`——选项列表里已能看到完整名字，行内再滚动只会添乱 |
+| 降级 | `prefers-reduced-motion: reduce` 下关闭动画（**渐隐保留**：静默截断比不动更糟） |
+
+**为什么往返而不是单向循环**：单向要把文案复制一份才能接上，接缝处会读成「两个模型」。
+**为什么不用省略号**：省略号吃掉字符宽度、且暴露「被截了」；渐隐把这件事说得更含蓄，
+并让完整名字有机会被读完。
+
+**与侧栏会话标题（§7.4.1）同源**：两处都用 `useOverflowDistance` 测溢出宽度
+（内容宽 - 视口宽，**不用 `scrollWidth`**——它会把 transform 平移后的溢出算进去，
+距离会自激振荡）。差异只在触发方式：侧栏是 hover 才滚（触屏仅渐隐），配置栏是
+常驻慢滚（模型名是常驻信息，用户随时要读）。
+
 ## 8. Settings Toggles
 
 Effect toggles in the Settings panel, each persisted to localStorage（下表只列效果类开关，非全量）：
